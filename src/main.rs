@@ -1,11 +1,13 @@
 extern crate sdl2;
 extern crate rand;
 extern crate time;
+extern crate crossbeam;
 
 use sdl2::rect::Rect;
 use sdl2::pixels::Color;
 use sdl2::event::Event;
 use sdl2::keyboard::Keycode;
+use rand::Rng; // why did i need this for rng.gen?
 
 mod vec3;
 mod color3f;
@@ -14,9 +16,9 @@ use vec3::Vec3;
 use color3f::Color3f;
 use raytracer::{SceneObj,Primitive,Material,Ray,RayIsect,Path,MAX_BOUNCES};
 
-const REUSE_EYE_RAY_TIMES: i32 = 20;
+const REUSE_FIRST_ISECT_TIMES: u32 = 19;
 
-fn ray_primitive_intersects(ray: &Ray, scene_obj: &SceneObj) -> Option<RayIsect> {
+fn ray_primitive_intersects<'a>(ray: &Ray, scene_obj: &'a SceneObj) -> Option<RayIsect<'a>> {
     match scene_obj.prim {
         Primitive::Sphere(origin, radius) => {
             let v = ray.origin - origin;
@@ -28,9 +30,9 @@ fn ray_primitive_intersects(ray: &Ray, scene_obj: &SceneObj) -> Option<RayIsect>
                 let i2 = b + det;
                 if i2 > 0. {
                     if i1 < 0. {
-                        Some(RayIsect{dist:i2, scene_obj:scene_obj.clone(), ray:ray.clone()})
+                        Some(RayIsect{dist:i2, scene_obj:&scene_obj, ray:ray.clone()})
                     } else {
-                        Some(RayIsect{dist:i1, scene_obj:scene_obj.clone(), ray:ray.clone()})
+                        Some(RayIsect{dist:i1, scene_obj:&scene_obj, ray:ray.clone()})
                     }
                 } else {
                     None
@@ -53,7 +55,7 @@ fn ray_primitive_intersects(ray: &Ray, scene_obj: &SceneObj) -> Option<RayIsect>
                (v0d < 0. && v1d < 0. && v2d < 0.) {
                 let dist = nominator / ray.dir.dot(&n);
                 if dist > EPSILON {
-                    Some(RayIsect{dist:dist, scene_obj: scene_obj.clone(), ray: ray.clone()})
+                    Some(RayIsect{dist:dist, scene_obj: &scene_obj, ray: ray.clone()})
                 } else {
                     None
                 }
@@ -64,7 +66,7 @@ fn ray_primitive_intersects(ray: &Ray, scene_obj: &SceneObj) -> Option<RayIsect>
     }
 }
 
-fn find_first_intersection(ray: &Ray, scene: &Vec<SceneObj>) -> Option<RayIsect> {
+fn find_first_intersection<'a>(ray: &Ray, scene: &'a Vec<SceneObj>) -> Option<RayIsect<'a>> {
     let mut nearest: Option<RayIsect> = None;
 
     for obj in scene {
@@ -122,7 +124,7 @@ fn new_random_ray_from_isect(isect: &RayIsect, rng: &mut rand::ThreadRng) -> Ray
     Ray {origin: ray_start_pos, dir: rand_dir}
 }
 
-fn make_ray_scatter_path(ray: &Ray, scene: &Vec<SceneObj>, rng: &mut rand::ThreadRng, path: &mut Path) {
+fn make_ray_scatter_path<'a>(ray: &Ray, scene: &'a Vec<SceneObj>, rng: &mut rand::ThreadRng, path: &mut Path<'a>) {
     match find_first_intersection(ray, scene) {
         Some(isect) => {
             path.isects[path.num_bounces as usize] = isect.clone();
@@ -151,11 +153,30 @@ fn collect_light_from_path(path: &Path) -> Color3f {
 }
 
 fn path_trace_rays(rays: &Vec<Ray>, scene: &Vec<SceneObj>, rng: &mut rand::ThreadRng, photon_buffer: &mut [Color3f]) {
+
+    let mut path = Path {
+        num_bounces: 0,
+        isects: [RayIsect{ray:Ray::default(), dist: 0., scene_obj: &scene[0]}; MAX_BOUNCES]
+    };
+    // could have initted unsafely (and maybe unwisely) like this also:
+    // unsafe { path = std::mem::uninitialized(); }
+
     for i in 0..rays.len() {
-        for _ in 0..REUSE_EYE_RAY_TIMES {
-            let mut path = Path::default();
-            make_ray_scatter_path(&rays[i], scene, rng, &mut path);
-            photon_buffer[i] += collect_light_from_path(&path);
+        // trace first path and collect its light contribution
+        path.num_bounces = 0;
+        make_ray_scatter_path(&rays[i], scene, rng, &mut path);
+        photon_buffer[i] += collect_light_from_path(&path);
+        // now reuse the first isect for a few more paths! (great optimisation)
+        if path.num_bounces > 0 {
+            let first_isect_norm = isect_normal(&path.isects[0]);
+            let ray_start_pos = isect_pos(&path.isects[0]) + first_isect_norm.smul(EPSILON);
+            for _ in 0..REUSE_FIRST_ISECT_TIMES {
+                path.num_bounces = 1;
+                let rand_dir = random_vector_in_hemisphere(&first_isect_norm, rng);
+                let next_ray = Ray {origin: ray_start_pos, dir: rand_dir};
+                make_ray_scatter_path(&next_ray, scene, rng, &mut path);
+                photon_buffer[i] += collect_light_from_path(&path);
+            }
         }
     }
 }
@@ -215,20 +236,16 @@ fn render_pixels<F>(renderer: &mut sdl2::render::Renderer, photon_buffer: &[Colo
     }
 }
 
-fn max3<T: std::cmp::PartialOrd>(a: T, b: T, c: T) -> T {
-    if a>b { if a>c {a} else {c} } else { if b>c {b} else {c} }
-}
-
 fn hdr_postprocess_blit(renderer: &mut sdl2::render::Renderer, photon_buffer: &[Color3f]) {
-    let mut max_color = Color3f::default();
+    let mut max_color = 0.;
 
     for col in photon_buffer.iter() {
-        if col.r > max_color.r { max_color.r = col.r; }
-        if col.g > max_color.g { max_color.g = col.g; }
-        if col.b > max_color.b { max_color.b = col.b; }
+        if col.r > max_color { max_color = col.r; }
+        if col.g > max_color { max_color = col.g; }
+        if col.b > max_color { max_color = col.b; }
     }
 
-    let brightness = 1. / max3(max_color.r, max_color.g, max_color.b).sqrt();
+    let brightness = 1. / max_color.sqrt();
 
     render_pixels(renderer, photon_buffer, |c: &Color3f| {
         Color3f {r: c.r.sqrt(), g: c.g.sqrt(), b: c.b.sqrt()}.smul(brightness)
@@ -304,25 +321,6 @@ fn main_loop(sdl_context: &sdl2::Sdl, renderer: &mut sdl2::render::Renderer) {
                 diffuse: Color3f{r:1.,g:1.,b:1.}
             }
         },
-        /*
-        SceneObj {
-            prim: Primitive::Triangle(
-    {
-        Triangle(Vec3{-100,-2,0}, Vec3{-100,-2,-100}, Vec3{100,-2,0}),
-        Material {Color{0,0,0}, Color{1,1,1}}
-    }, {
-        Triangle(Vec3{100,-2,0}, Vec3{-100,-2,-100}, Vec3{100,-2,-100}),
-        Material {Color{0,0,0}, Color{1,1,1}}
-    },
-    // back wall
-    {
-        Triangle(Vec3{-100,-2,-10}, Vec3{100,100,-10}, Vec3{100,-2,-10}),
-        Material{Color{}, Color{1,1,1}}
-    }, {
-        Triangle(Vec3{100,100,-20},Vec3{-100,100,-10},Vec3{-100,-2,-10}),
-        Material{Color{}, Color{1,1,1}}
-    },
-    */
         // light
         SceneObj {
             prim: Primitive::Sphere(Vec3 {x: 0., y:8., z: -4.}, 3.),
@@ -331,30 +329,10 @@ fn main_loop(sdl_context: &sdl2::Sdl, renderer: &mut sdl2::render::Renderer) {
                 diffuse: Color3f{r:1.,g:1.,b:1.}
             }
         }
-        /*
-        }, {
-            Sphere(Vec3 {-2,-1,-4}, 0.5),
-            Material { Color{1,0,0}, Color{1,1,1} }
-        }, {
-            Sphere(Vec3 {0,0,-4}, 0.5),
-            Material { Color{0,0,1}, Color{1,1,1} }
-        },
-        */
     ];
-
-    /*
-    renderer.set_draw_color(Color::RGB(255, 0, 0));
-    renderer.clear();
-    renderer.set_draw_color(Color::RGB(0, 255, 0));
-    match renderer.fill_rect(Rect::new(200, 200, 10, 20)) {
-        Ok(_) => {},
-        Err(e) => panic!("fill_rect failed: {}", e)
-    }
-    */
 
     let output_size = renderer.output_size().unwrap();
     let mut event_pump = sdl_context.event_pump().unwrap();
-    let mut rng = rand::thread_rng();
     let mut photon_buffer = vec![Color3f::default(); (output_size.0 * output_size.1) as usize];
 
     'running: loop {
@@ -369,31 +347,41 @@ fn main_loop(sdl_context: &sdl2::Sdl, renderer: &mut sdl2::render::Renderer) {
 
         let t = time::precise_time_ns();
 
-        path_trace_scene(&scene, output_size.0 as i32, output_size.1 as i32,
-                       (0, output_size.1 as i32),
-                       &mut photon_buffer,
-                       &mut rng);
+        // parallelize this path tracing business
+        {
+            const THREADS: usize = 8;
+            let chunks: Vec<_> = photon_buffer.chunks_mut((output_size.0 * output_size.1) as usize / THREADS).collect();
+
+            crossbeam::scope(|scope| {
+                for (i, chunk) in chunks.into_iter().enumerate() {
+                    let _scene = &scene;
+
+                    scope.spawn(move || {
+                        let mut rng = rand::thread_rng();
+                        path_trace_scene(_scene,
+                                         output_size.0 as i32,
+                                         output_size.1 as i32,
+                                         ((i*output_size.1 as usize / THREADS) as i32,
+                                          ((i+1)*output_size.1 as usize / THREADS) as i32),
+                                         chunk,
+                                         &mut rng);
+                    });
+                }
+            });
+        }
 
         hdr_postprocess_blit(renderer, &photon_buffer);
 
         let t_ = time::precise_time_ns();
         println!("{} ms per frame, {} paths per second.",
                  (t_ - t)/1000000,
-                 ((1000000000u64 * (output_size.0 * output_size.1 * REUSE_EYE_RAY_TIMES as u32) as u64) / (t_ - t))
+                 ((1000000000u64 * (output_size.0 * output_size.1 * (1u32+REUSE_FIRST_ISECT_TIMES)) as u64) / (t_ - t))
         );
         renderer.present();
     }
 }
 
-use rand::Rng; // why did i need this for rng.gen?
-
 fn main() {
-    let mut rng = rand::thread_rng();
-    println!("{}\n", rng.gen::<f32>());
-    println!("{} {} {}\n",
-             rand::random::<f32>(),
-             rand::random::<f32>(),
-             rand::random::<f32>());
     let sdl_context = sdl2::init().unwrap();
     let video_subsystem = sdl_context.video().unwrap();
     let window = video_subsystem.window("RUSTY BALLS!!", 512, 512)
@@ -405,4 +393,3 @@ fn main() {
 
     main_loop(&sdl_context, &mut renderer);
 }
-

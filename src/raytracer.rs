@@ -2,7 +2,7 @@ use std::default::Default;
 use vec3::Vec3;
 use color3f::Color3f;
 
-#[derive(Clone,Default)]
+#[derive(Clone,Copy,Default)]
 pub struct Ray {
     pub origin: Vec3,
     pub dir: Vec3
@@ -32,19 +32,18 @@ pub struct SceneObj {
     pub mat: Material
 }
 
-#[derive(Clone,Default)]
-pub struct RayIsect {
+#[derive(Clone,Copy)]
+pub struct RayIsect<'a> {
     pub ray: Ray,
     pub dist: f32,
-    pub scene_obj: SceneObj
+    pub scene_obj: &'a SceneObj
 }
 
 pub const MAX_BOUNCES: usize = 4;
 
-#[derive(Default)]
-pub struct Path {
+pub struct Path<'a> {
     pub num_bounces: i32,
-    pub isects: [RayIsect; MAX_BOUNCES]
+    pub isects: [RayIsect<'a>; MAX_BOUNCES]
 }
 
 #[test]

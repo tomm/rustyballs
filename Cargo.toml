@@ -7,3 +7,4 @@ authors = ["Tom Morton <tomm@riseup.net>"]
 sdl2 = "0.22"
 rand = "0.3"
 time = "0.1.35"
+crossbeam = "0.2"
