@@ -9,14 +9,13 @@ use sdl2::event::Event;
 use sdl2::keyboard::Keycode;
 use rand::Rng; // why did i need this for rng.gen?
 
-mod vec3;
-mod color3f;
-mod raytracer;
+pub mod vec3;
+pub mod color3f;
+pub mod raytracer;
 use vec3::Vec3;
 use color3f::Color3f;
-use raytracer::{SceneObj,Primitive,Material,Ray,RayIsect,Path,IsectFrom,MAX_BOUNCES};
-
-const REUSE_FIRST_ISECT_TIMES: u32 = 19;
+use raytracer::{EPSILON,RenderConfig,SceneObj,Primitive,Material,Ray,RayIsect,
+Path,IsectFrom,MAX_BOUNCES};
 
 fn ray_primitive_intersects<'a>(ray: &Ray, scene_obj: &'a SceneObj) -> Option<RayIsect<'a>> {
     match scene_obj.prim {
@@ -116,8 +115,6 @@ fn random_vector_in_hemisphere(norm: &Vec3, rng: &mut rand::ThreadRng) -> Vec3 {
     ).normal()
 }
 
-const EPSILON: f32 = 0.0001;
-
 fn new_random_ray_from_isect(isect: &RayIsect, rng: &mut rand::ThreadRng) -> Ray {
     let last_isect_norm = isect_normal(isect);
     let ray_start_pos = isect_pos(isect) + last_isect_norm.smul(EPSILON);
@@ -161,7 +158,8 @@ fn collect_light_from_path(path: &Path) -> Color3f {
     color
 }
 
-fn path_trace_rays(rays: &Vec<Ray>, scene: &Vec<SceneObj>, rng: &mut rand::ThreadRng, photon_buffer: &mut [Color3f]) {
+fn path_trace_rays(config: &RenderConfig, rays: &Vec<Ray>, scene: &Vec<SceneObj>,
+                   rng: &mut rand::ThreadRng, photon_buffer: &mut [Color3f]) {
 
     let mut path = Path {
         num_bounces: 0,
@@ -178,7 +176,7 @@ fn path_trace_rays(rays: &Vec<Ray>, scene: &Vec<SceneObj>, rng: &mut rand::Threa
         // now reuse the first isect for a few more paths! (great optimisation)
         if path.num_bounces > 0 {
             let first_isect = path.isects[0].clone();
-            for _ in 0..REUSE_FIRST_ISECT_TIMES {
+            for _ in 0..config.samples_per_first_isect {
                 path.num_bounces = 1;
                 match (first_isect.scene_obj.mat.isect_prog)(&first_isect, rng) {
                     Some(next_ray) => {
@@ -214,7 +212,7 @@ fn make_eye_rays(width: i32, height: i32, y_bounds: (i32, i32), sub_pix: (f32, f
     rays
 }
 
-fn path_trace_scene(scene: &Vec<SceneObj>, width: i32, height: i32,
+fn path_trace_scene(config: &RenderConfig, scene: &Vec<SceneObj>, width: i32, height: i32,
                   y_bounds: (i32, i32), photon_buffer: &mut[Color3f],
                   rng: &mut rand::ThreadRng) {
     let subpix = (rng.gen::<f32>(), rng.gen::<f32>());
@@ -223,6 +221,7 @@ fn path_trace_scene(scene: &Vec<SceneObj>, width: i32, height: i32,
     assert!(eye_rays.len() == photon_buffer.len());
 
     path_trace_rays(
+        config,
         &eye_rays,
         scene, rng, photon_buffer
     );
@@ -260,6 +259,27 @@ fn hdr_postprocess_blit(renderer: &mut sdl2::render::Renderer, photon_buffer: &[
 
     render_pixels(renderer, photon_buffer, |c: &Color3f| {
         Color3f {r: (c.r+1.).ln(), g: (c.g+1.).ln(), b: (c.b+1.).ln()}.smul(brightness)
+    });
+}
+
+fn parallel_path_trace_scene(config: &RenderConfig, scene: &Vec<SceneObj>, width: u32, height: u32,
+                             photon_buffer: &mut[Color3f]) {
+    let chunks: Vec<_> = photon_buffer.chunks_mut((width * height) as usize / config.threads).collect();
+
+    crossbeam::scope(|scope| {
+        for (i, chunk) in chunks.into_iter().enumerate() {
+            scope.spawn(move || {
+                let mut rng = rand::thread_rng();
+                path_trace_scene(config,
+                                 scene,
+                                 width as i32,
+                                 height as i32,
+                                 ((i*height as usize / config.threads) as i32,
+                                  ((i+1)*height as usize / config.threads) as i32),
+                                 chunk,
+                                 &mut rng);
+            });
+        }
     });
 }
 
@@ -314,154 +334,9 @@ fn glass_prog(isect: &RayIsect, rng: &mut rand::ThreadRng) -> Option<Ray> {
              dir: reflect_dir})
 }
 
-fn main_loop(sdl_context: &sdl2::Sdl, renderer: &mut sdl2::render::Renderer) {
-    let mut scene: Vec<SceneObj> = vec![
-        // balls in scene
-        SceneObj {
-            prim: Primitive::Sphere(Vec3{x:0., y: -0.6, z: -4.}, 1.),
-            mat: Material {
-                emissive: Color3f {r:0., g:0., b:0.},
-                diffuse: Color3f {r:1., g:1., b:1.},
-                isect_prog: glass_prog
-            }
-        },
-        SceneObj {
-            prim: Primitive::Sphere(Vec3 {x: 2., y:-1., z: -4.}, 0.5),
-            mat: Material {
-                emissive: Color3f {r:0.,g:1.,b:0.},
-                diffuse: Color3f{r:1.,g:1.,b:1.},
-                isect_prog: glass_prog
-            }
-        },
-        SceneObj {
-            prim: Primitive::Sphere(Vec3 {x: -2., y:-1., z: -4.}, 0.5),
-            mat: Material {
-                emissive: Color3f {r:1.,g:0.,b:0.},
-                diffuse: Color3f{r:1.,g:1.,b:1.},
-                isect_prog: glass_prog
-            }
-        },
-        SceneObj {
-            prim: Primitive::Sphere(Vec3 {x: 0., y:0., z: -4.}, 0.5),
-            mat: Material {
-                emissive: Color3f {r:0.,g:0.,b:1.},
-                diffuse: Color3f{r:1.,g:1.,b:1.},
-                isect_prog: glass_prog
-            }
-        },
-        // floor
-        SceneObj {
-            prim: Primitive::Triangle(Vec3 {x: -100., y:-2., z: 0.},
-                                      Vec3 {x: -100., y:-2., z: -100.},
-                                      Vec3 {x: 100., y:-2., z: 0.}),
-            mat: Material {
-                emissive: Color3f {r:0.,g:0.,b:0.},
-                diffuse: Color3f{r:1.,g:1.,b:1.},
-                isect_prog: shiny_prog
-            }
-        },
-        SceneObj {
-            prim: Primitive::Triangle(Vec3 {x: 100., y:-2., z: 0.},
-                                      Vec3 {x: -100., y:-2., z: -100.},
-                                      Vec3 {x: 100., y:-2., z: -100.}),
-            mat: Material {
-                emissive: Color3f {r:0.,g:0.,b:0.},
-                diffuse: Color3f{r:1.,g:1.,b:1.},
-                isect_prog: shiny_prog
-            }
-        },
-        // back wall
-        SceneObj {
-            prim: Primitive::Triangle(Vec3 {x: -100., y:-2., z: -10.},
-                                      Vec3 {x: 100., y:100., z: -10.},
-                                      Vec3 {x: 100., y:-2., z: -10.}),
-            mat: Material {
-                emissive: Color3f {r:0.,g:0.,b:0.},
-                diffuse: Color3f{r:1.,g:1.,b:1.},
-                isect_prog: shiny_prog
-            }
-        },
-        SceneObj {
-            prim: Primitive::Triangle(Vec3 {x: 100., y:100., z: -20.},
-                                      Vec3 {x: -100., y:100., z: -10.},
-                                      Vec3 {x: -100., y:-2., z: -10.}),
-            mat: Material {
-                emissive: Color3f {r:0.,g:0.,b:0.},
-                diffuse: Color3f{r:1.,g:1.,b:1.},
-                isect_prog: shiny_prog
-            }
-        },
-        // light
-        SceneObj {
-            prim: Primitive::Sphere(Vec3 {x: 0., y:8., z: -4.}, 1.),
-            mat: Material {
-                emissive: Color3f {r:1.,g:1.,b:1.},
-                diffuse: Color3f{r:1.,g:1.,b:1.},
-                isect_prog: shiny_prog
-            }
-        }
-    ];
+pub fn render_loop<F>(config: &RenderConfig, mut scene: Vec<SceneObj>, mut pre_draw_callback: F)
+    where F: FnMut(&mut Vec<SceneObj>, &mut Vec<Color3f>) {
 
-    let output_size = renderer.output_size().unwrap();
-    let mut event_pump = sdl_context.event_pump().unwrap();
-    let mut photon_buffer = vec![Color3f::default(); (output_size.0 * output_size.1) as usize];
-
-//    let mut time: f32 = 0.;
-    'running: loop {
-        /*
-        time += 0.1;
-        scene[0].prim = Primitive::Sphere(Vec3{x:0., y: -0.6 + time.sin(), z: -4.}, 1.);
-        scene[1].prim = Primitive::Sphere(Vec3 {x: 2.*time.sin(), y:-1., z: -4.-2.*time.cos()}, 0.5);
-        scene[2].prim = Primitive::Sphere(Vec3 {x: 2.*(time+3.1416).sin(), y:-1., z: -4.-2.*(time+3.1416).cos()}, 0.5);
-        photon_buffer = vec![Color3f::default(); (output_size.0 * output_size.1) as usize];
-        */
-
-        for event in event_pump.poll_iter() {
-            match event {
-                Event::Quit {..} | Event::KeyDown { keycode: Some(Keycode::Escape), .. } => {
-                    break 'running
-                },
-                _ => {}
-            }
-        }
-
-        let t = time::precise_time_ns();
-
-        // parallelize this path tracing business
-        {
-            const THREADS: usize = 8;
-            let chunks: Vec<_> = photon_buffer.chunks_mut((output_size.0 * output_size.1) as usize / THREADS).collect();
-
-            crossbeam::scope(|scope| {
-                for (i, chunk) in chunks.into_iter().enumerate() {
-                    let _scene = &scene;
-
-                    scope.spawn(move || {
-                        let mut rng = rand::thread_rng();
-                        path_trace_scene(_scene,
-                                         output_size.0 as i32,
-                                         output_size.1 as i32,
-                                         ((i*output_size.1 as usize / THREADS) as i32,
-                                          ((i+1)*output_size.1 as usize / THREADS) as i32),
-                                         chunk,
-                                         &mut rng);
-                    });
-                }
-            });
-        }
-
-        hdr_postprocess_blit(renderer, &photon_buffer);
-
-        let t_ = time::precise_time_ns();
-        println!("{} ms per frame, {} paths per second.",
-                 (t_ - t)/1000000,
-                 ((1000000000u64 * (output_size.0 * output_size.1 * (1u32+REUSE_FIRST_ISECT_TIMES)) as u64) / (t_ - t))
-        );
-        renderer.present();
-    }
-}
-
-fn main() {
     let sdl_context = sdl2::init().unwrap();
     let video_subsystem = sdl_context.video().unwrap();
     let window = video_subsystem.window("RUSTY BALLS!!", 512, 512)
@@ -471,5 +346,32 @@ fn main() {
         .unwrap();
     let mut renderer = window.renderer().build().unwrap();
 
-    main_loop(&sdl_context, &mut renderer);
+    let output_size = renderer.output_size().unwrap();
+    let mut event_pump = sdl_context.event_pump().unwrap();
+    let mut photon_buffer = vec![Color3f::default(); (output_size.0 * output_size.1) as usize];
+
+    'running: loop {
+        for event in event_pump.poll_iter() {
+            match event {
+                Event::Quit {..} | Event::KeyDown { keycode: Some(Keycode::Escape), .. } => {
+                    break 'running
+                },
+                _ => {}
+            }
+        }
+
+        pre_draw_callback(&mut scene, &mut photon_buffer);
+
+        let t = time::precise_time_ns();
+
+        parallel_path_trace_scene(config, &scene, output_size.0, output_size.1, &mut photon_buffer);
+        hdr_postprocess_blit(&mut renderer, &photon_buffer);
+
+        let t_ = time::precise_time_ns();
+        println!("{} ms per frame, {} paths per second.",
+                 (t_ - t)/1000000,
+                 ((1000000000u64 * (output_size.0 * output_size.1 * (1u32+config.samples_per_first_isect)) as u64) / (t_ - t))
+        );
+        renderer.present();
+    }
 }
