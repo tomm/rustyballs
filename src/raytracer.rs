@@ -1,3 +1,4 @@
+extern crate rand;
 use std::default::Default;
 use vec3::Vec3;
 use color3f::Color3f;
@@ -20,10 +21,33 @@ impl Default for Primitive {
     }
 }
 
-#[derive(Clone,Default)]
+pub type IsectProg = fn(&RayIsect, &mut rand::ThreadRng) -> Option<Ray>;
+
 pub struct Material {
     pub emissive: Color3f,
-    pub diffuse: Color3f
+    pub diffuse: Color3f,
+    pub isect_prog: IsectProg
+}
+
+impl Clone for Material {
+    fn clone(&self) -> Material {
+        Material {
+            emissive: self.emissive,
+            diffuse: self.diffuse,
+            isect_prog: self.isect_prog
+        }
+    }
+}
+
+fn default_isect_prog(isect: &RayIsect, rng: &mut rand::ThreadRng) -> Option<Ray> { None }
+impl Default for Material {
+    fn default() -> Material {
+        Material {
+            emissive: Color3f::default(),
+            diffuse: Color3f::default(),
+            isect_prog: default_isect_prog
+        }
+    }
 }
 
 #[derive(Clone,Default)]
@@ -33,13 +57,17 @@ pub struct SceneObj {
 }
 
 #[derive(Clone,Copy)]
+pub enum IsectFrom { Outside, Inside }
+
+#[derive(Clone,Copy)]
 pub struct RayIsect<'a> {
     pub ray: Ray,
     pub dist: f32,
+    pub from: IsectFrom,
     pub scene_obj: &'a SceneObj
 }
 
-pub const MAX_BOUNCES: usize = 4;
+pub const MAX_BOUNCES: usize = 6;
 
 pub struct Path<'a> {
     pub num_bounces: i32,

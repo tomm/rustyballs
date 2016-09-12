@@ -14,7 +14,7 @@ mod color3f;
 mod raytracer;
 use vec3::Vec3;
 use color3f::Color3f;
-use raytracer::{SceneObj,Primitive,Material,Ray,RayIsect,Path,MAX_BOUNCES};
+use raytracer::{SceneObj,Primitive,Material,Ray,RayIsect,Path,IsectFrom,MAX_BOUNCES};
 
 const REUSE_FIRST_ISECT_TIMES: u32 = 19;
 
@@ -30,9 +30,11 @@ fn ray_primitive_intersects<'a>(ray: &Ray, scene_obj: &'a SceneObj) -> Option<Ra
                 let i2 = b + det;
                 if i2 > 0. {
                     if i1 < 0. {
-                        Some(RayIsect{dist:i2, scene_obj:&scene_obj, ray:ray.clone()})
+                        // inside! XXX don't need until we have refraction
+                        Some(RayIsect{from: IsectFrom::Inside, dist:i2, scene_obj:&scene_obj, ray:ray.clone()})
                     } else {
-                        Some(RayIsect{dist:i1, scene_obj:&scene_obj, ray:ray.clone()})
+                        // outside
+                        Some(RayIsect{from: IsectFrom::Outside, dist:i1, scene_obj:&scene_obj, ray:ray.clone()})
                     }
                 } else {
                     None
@@ -41,7 +43,6 @@ fn ray_primitive_intersects<'a>(ray: &Ray, scene_obj: &'a SceneObj) -> Option<Ra
                 None
             }
         }
-        // not implemented yet!
         Primitive::Triangle(a, b, c) => {
             let n = (c-a).cross(&(b-a));
             let v0_cross = (b-ray.origin).cross(&(a-ray.origin));
@@ -55,7 +56,7 @@ fn ray_primitive_intersects<'a>(ray: &Ray, scene_obj: &'a SceneObj) -> Option<Ra
                (v0d < 0. && v1d < 0. && v2d < 0.) {
                 let dist = nominator / ray.dir.dot(&n);
                 if dist > EPSILON {
-                    Some(RayIsect{dist:dist, scene_obj: &scene_obj, ray: ray.clone()})
+                    Some(RayIsect{from: IsectFrom::Outside, dist:dist, scene_obj: &scene_obj, ray: ray.clone()})
                 } else {
                     None
                 }
@@ -130,8 +131,13 @@ fn make_ray_scatter_path<'a>(ray: &Ray, scene: &'a Vec<SceneObj>, rng: &mut rand
             path.isects[path.num_bounces as usize] = isect.clone();
             path.num_bounces += 1;
             if path.num_bounces < MAX_BOUNCES as i32 {
-                let next_ray = new_random_ray_from_isect(&isect, rng);
-                make_ray_scatter_path(&next_ray, scene, rng, path);
+                // call material's isect_prog to see what our next ray will be
+                match (isect.scene_obj.mat.isect_prog)(&isect, rng) {
+                    Some(next_ray) => {
+                        make_ray_scatter_path(&next_ray, scene, rng, path);
+                    },
+                    None => {}
+                }
             }
         },
         None => ()
@@ -143,7 +149,10 @@ fn collect_light_from_path(path: &Path) -> Color3f {
 
     for i in (0..path.num_bounces as usize).rev() {
         let surface_normal = isect_normal(&path.isects[i]);
-        let cos_theta = (-path.isects[i].ray.dir.normal()).dot(&surface_normal);
+        let cos_theta = match path.isects[i].from {
+            IsectFrom::Inside => (path.isects[i].ray.dir.normal()).dot(&surface_normal),
+            IsectFrom::Outside => (-path.isects[i].ray.dir.normal()).dot(&surface_normal)
+        };
         let reflected = (color * path.isects[i].scene_obj.mat.diffuse).smul(cos_theta);
 
         color = path.isects[i].scene_obj.mat.emissive + reflected;
@@ -156,7 +165,7 @@ fn path_trace_rays(rays: &Vec<Ray>, scene: &Vec<SceneObj>, rng: &mut rand::Threa
 
     let mut path = Path {
         num_bounces: 0,
-        isects: [RayIsect{ray:Ray::default(), dist: 0., scene_obj: &scene[0]}; MAX_BOUNCES]
+        isects: [RayIsect{from: IsectFrom::Outside, ray:Ray::default(), dist: 0., scene_obj: &scene[0]}; MAX_BOUNCES]
     };
     // could have initted unsafely (and maybe unwisely) like this also:
     // unsafe { path = std::mem::uninitialized(); }
@@ -168,14 +177,16 @@ fn path_trace_rays(rays: &Vec<Ray>, scene: &Vec<SceneObj>, rng: &mut rand::Threa
         photon_buffer[i] += collect_light_from_path(&path);
         // now reuse the first isect for a few more paths! (great optimisation)
         if path.num_bounces > 0 {
-            let first_isect_norm = isect_normal(&path.isects[0]);
-            let ray_start_pos = isect_pos(&path.isects[0]) + first_isect_norm.smul(EPSILON);
+            let first_isect = path.isects[0].clone();
             for _ in 0..REUSE_FIRST_ISECT_TIMES {
                 path.num_bounces = 1;
-                let rand_dir = random_vector_in_hemisphere(&first_isect_norm, rng);
-                let next_ray = Ray {origin: ray_start_pos, dir: rand_dir};
-                make_ray_scatter_path(&next_ray, scene, rng, &mut path);
-                photon_buffer[i] += collect_light_from_path(&path);
+                match (first_isect.scene_obj.mat.isect_prog)(&first_isect, rng) {
+                    Some(next_ray) => {
+                        make_ray_scatter_path(&next_ray, scene, rng, &mut path);
+                        photon_buffer[i] += collect_light_from_path(&path);
+                    },
+                    None => {}
+                }
             }
         }
     }
@@ -218,8 +229,8 @@ fn path_trace_scene(scene: &Vec<SceneObj>, width: i32, height: i32,
 }
 
 fn render_pixels<F>(renderer: &mut sdl2::render::Renderer, photon_buffer: &[Color3f],
-                   mut color_transform_fn: F)
-    where F: FnMut(&Color3f) -> Color3f {
+                    color_transform_fn: F)
+    where F: Fn(&Color3f) -> Color3f {
     
     let output_size = renderer.output_size().unwrap();
 
@@ -245,42 +256,97 @@ fn hdr_postprocess_blit(renderer: &mut sdl2::render::Renderer, photon_buffer: &[
         if col.b > max_color { max_color = col.b; }
     }
 
-    let brightness = 1. / max_color.sqrt();
+    let brightness = 1. / (1.+max_color).ln();
 
     render_pixels(renderer, photon_buffer, |c: &Color3f| {
-        Color3f {r: c.r.sqrt(), g: c.g.sqrt(), b: c.b.sqrt()}.smul(brightness)
+        Color3f {r: (c.r+1.).ln(), g: (c.g+1.).ln(), b: (c.b+1.).ln()}.smul(brightness)
     });
 }
 
+fn shiny_prog(isect: &RayIsect, rng: &mut rand::ThreadRng) -> Option<Ray> {
+    let die = rng.gen::<f32>();
+    if die < 0.2 {
+        let isect_normal = isect_normal(isect);
+        let isect_pos = isect_pos(isect);
+            let reflect = isect.ray.dir - (isect_normal.smul(isect.ray.dir.dot(&isect_normal))).smul(2.);
+            Some(Ray{origin: isect_pos + isect_normal.smul(EPSILON),
+                     dir: reflect.normal()})
+    } else {
+        // diffuse
+        Some(new_random_ray_from_isect(isect, rng))
+    }
+}
+
+fn glass_prog(isect: &RayIsect, rng: &mut rand::ThreadRng) -> Option<Ray> {
+    let isect_normal = isect_normal(isect);
+    let isect_pos = isect_pos(isect);
+
+    // refraction
+    let norm: Vec3;
+    // refractive index of original medium
+    let n1: f32;
+    let n2: f32;
+    
+    match isect.from {
+        IsectFrom::Outside => {
+            n1 = 1.; n2 = 1.4;
+            norm = isect_normal;
+        },
+        IsectFrom::Inside => {
+            n1 = 1.4; n2 = 1.;
+            norm = -isect_normal;
+        }
+    };
+    // incoming angle too tight: reflect instead
+    if 1.+norm.dot(&isect.ray.dir) > rng.gen::<f32>() {
+        let reflect = isect.ray.dir - (isect_normal.smul(isect.ray.dir.dot(&isect_normal))).smul(2.);
+        return Some(Ray{origin: isect_pos + isect_normal.smul(EPSILON),
+                 dir: reflect.normal()});
+    }
+    let n: f32 = n1 / n2;
+    let c1 = -norm.dot(&isect.ray.dir);
+    let c2 = (1. - n*n * (1. - c1*c1)).sqrt();
+    let reflect_dir = (isect.ray.dir.smul(n) + norm.smul(n * c1 - c2)).normal();
+    // XXX sometimes this fails. could be on very edge of shape. investigate
+    //assert!(isect.ray.dir.dot(&reflect_dir) >= 0.);
+
+    Some(Ray{origin: isect_pos - norm.smul(EPSILON),
+             dir: reflect_dir})
+}
+
 fn main_loop(sdl_context: &sdl2::Sdl, renderer: &mut sdl2::render::Renderer) {
-    let scene: Vec<SceneObj> = vec![
+    let mut scene: Vec<SceneObj> = vec![
         // balls in scene
         SceneObj {
-            prim: Primitive::Sphere(Vec3{x:0., y: -1.5, z: -4.}, 1.),
+            prim: Primitive::Sphere(Vec3{x:0., y: -0.6, z: -4.}, 1.),
             mat: Material {
                 emissive: Color3f {r:0., g:0., b:0.},
-                diffuse: Color3f {r:1., g:1., b:1.}
+                diffuse: Color3f {r:1., g:1., b:1.},
+                isect_prog: glass_prog
             }
         },
         SceneObj {
             prim: Primitive::Sphere(Vec3 {x: 2., y:-1., z: -4.}, 0.5),
             mat: Material {
                 emissive: Color3f {r:0.,g:1.,b:0.},
-                diffuse: Color3f{r:1.,g:1.,b:1.}
+                diffuse: Color3f{r:1.,g:1.,b:1.},
+                isect_prog: glass_prog
             }
         },
         SceneObj {
             prim: Primitive::Sphere(Vec3 {x: -2., y:-1., z: -4.}, 0.5),
             mat: Material {
                 emissive: Color3f {r:1.,g:0.,b:0.},
-                diffuse: Color3f{r:1.,g:1.,b:1.}
+                diffuse: Color3f{r:1.,g:1.,b:1.},
+                isect_prog: glass_prog
             }
         },
         SceneObj {
             prim: Primitive::Sphere(Vec3 {x: 0., y:0., z: -4.}, 0.5),
             mat: Material {
                 emissive: Color3f {r:0.,g:0.,b:1.},
-                diffuse: Color3f{r:1.,g:1.,b:1.}
+                diffuse: Color3f{r:1.,g:1.,b:1.},
+                isect_prog: glass_prog
             }
         },
         // floor
@@ -290,7 +356,8 @@ fn main_loop(sdl_context: &sdl2::Sdl, renderer: &mut sdl2::render::Renderer) {
                                       Vec3 {x: 100., y:-2., z: 0.}),
             mat: Material {
                 emissive: Color3f {r:0.,g:0.,b:0.},
-                diffuse: Color3f{r:1.,g:1.,b:1.}
+                diffuse: Color3f{r:1.,g:1.,b:1.},
+                isect_prog: shiny_prog
             }
         },
         SceneObj {
@@ -299,7 +366,8 @@ fn main_loop(sdl_context: &sdl2::Sdl, renderer: &mut sdl2::render::Renderer) {
                                       Vec3 {x: 100., y:-2., z: -100.}),
             mat: Material {
                 emissive: Color3f {r:0.,g:0.,b:0.},
-                diffuse: Color3f{r:1.,g:1.,b:1.}
+                diffuse: Color3f{r:1.,g:1.,b:1.},
+                isect_prog: shiny_prog
             }
         },
         // back wall
@@ -309,7 +377,8 @@ fn main_loop(sdl_context: &sdl2::Sdl, renderer: &mut sdl2::render::Renderer) {
                                       Vec3 {x: 100., y:-2., z: -10.}),
             mat: Material {
                 emissive: Color3f {r:0.,g:0.,b:0.},
-                diffuse: Color3f{r:1.,g:1.,b:1.}
+                diffuse: Color3f{r:1.,g:1.,b:1.},
+                isect_prog: shiny_prog
             }
         },
         SceneObj {
@@ -318,15 +387,17 @@ fn main_loop(sdl_context: &sdl2::Sdl, renderer: &mut sdl2::render::Renderer) {
                                       Vec3 {x: -100., y:-2., z: -10.}),
             mat: Material {
                 emissive: Color3f {r:0.,g:0.,b:0.},
-                diffuse: Color3f{r:1.,g:1.,b:1.}
+                diffuse: Color3f{r:1.,g:1.,b:1.},
+                isect_prog: shiny_prog
             }
         },
         // light
         SceneObj {
-            prim: Primitive::Sphere(Vec3 {x: 0., y:8., z: -4.}, 3.),
+            prim: Primitive::Sphere(Vec3 {x: 0., y:8., z: -4.}, 1.),
             mat: Material {
-                emissive: Color3f {r:1.,g:1.,b:0.8},
-                diffuse: Color3f{r:1.,g:1.,b:1.}
+                emissive: Color3f {r:1.,g:1.,b:1.},
+                diffuse: Color3f{r:1.,g:1.,b:1.},
+                isect_prog: shiny_prog
             }
         }
     ];
@@ -335,7 +406,16 @@ fn main_loop(sdl_context: &sdl2::Sdl, renderer: &mut sdl2::render::Renderer) {
     let mut event_pump = sdl_context.event_pump().unwrap();
     let mut photon_buffer = vec![Color3f::default(); (output_size.0 * output_size.1) as usize];
 
+//    let mut time: f32 = 0.;
     'running: loop {
+        /*
+        time += 0.1;
+        scene[0].prim = Primitive::Sphere(Vec3{x:0., y: -0.6 + time.sin(), z: -4.}, 1.);
+        scene[1].prim = Primitive::Sphere(Vec3 {x: 2.*time.sin(), y:-1., z: -4.-2.*time.cos()}, 0.5);
+        scene[2].prim = Primitive::Sphere(Vec3 {x: 2.*(time+3.1416).sin(), y:-1., z: -4.-2.*(time+3.1416).cos()}, 0.5);
+        photon_buffer = vec![Color3f::default(); (output_size.0 * output_size.1) as usize];
+        */
+
         for event in event_pump.poll_iter() {
             match event {
                 Event::Quit {..} | Event::KeyDown { keycode: Some(Keycode::Escape), .. } => {
