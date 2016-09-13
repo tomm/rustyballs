@@ -3,6 +3,7 @@ use rand::Rng; // why did i need this for rng.gen?
 use std::default::Default;
 use vec3::Vec3;
 use color3f::Color3f;
+use quaternion::Quaternion;
 
 pub const EPSILON: f32 = 0.0001;
 
@@ -18,7 +19,10 @@ pub struct RenderConfig {
 }
 impl Default for RenderConfig {
     fn default() -> RenderConfig {
-        RenderConfig{threads: 8, samples_per_first_isect: 20}
+        RenderConfig{
+            threads: 8,
+            samples_per_first_isect: 20,
+        }
     }
 }
 
@@ -34,33 +38,39 @@ impl Default for Primitive {
     }
 }
 
-pub type IsectProg = fn(&RayIsect, &mut rand::ThreadRng) -> Option<Ray>;
+pub type PathProgram = fn(&RayIsect, &mut rand::ThreadRng) -> Option<Ray>;
 
 pub struct Material {
     pub emissive: Color3f,
-    pub diffuse: Color3f,
-    pub isect_prog: IsectProg
+    pub transmissive: Color3f,
+    pub path_program: PathProgram
 }
 
 impl Clone for Material {
     fn clone(&self) -> Material {
         Material {
             emissive: self.emissive,
-            diffuse: self.diffuse,
-            isect_prog: self.isect_prog
+            transmissive: self.transmissive,
+            path_program: self.path_program
         }
     }
 }
 
-fn default_isect_prog(isect: &RayIsect, rng: &mut rand::ThreadRng) -> Option<Ray> { None }
+fn default_path_program(isect: &RayIsect, rng: &mut rand::ThreadRng) -> Option<Ray> { None }
 impl Default for Material {
     fn default() -> Material {
         Material {
             emissive: Color3f::default(),
-            diffuse: Color3f::default(),
-            isect_prog: default_isect_prog
+            transmissive: Color3f::default(),
+            path_program: default_path_program
         }
     }
+}
+
+pub struct Scene {
+    pub camera_position: Vec3,
+    pub camera_orientation: Quaternion,
+    pub objs: Vec<SceneObj>
 }
 
 #[derive(Clone,Default)]

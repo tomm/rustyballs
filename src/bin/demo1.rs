@@ -4,7 +4,9 @@ use rand::Rng; // why did i need this for rng.gen?
 use rustyballs::render_loop;
 use rustyballs::vec3::Vec3;
 use rustyballs::color3f::Color3f;
-use rustyballs::raytracer::{IsectFrom,Ray,RayIsect,RenderConfig,SceneObj,Primitive,Material,EPSILON};
+use rustyballs::quaternion::Quaternion;
+use rustyballs::raytracer::{IsectFrom,Ray,RayIsect,RenderConfig,SceneObj,Primitive,
+Scene,Material,EPSILON};
 
 fn shiny_prog(isect: &RayIsect, rng: &mut rand::ThreadRng) -> Option<Ray> {
     let die = rng.gen::<f32>();
@@ -15,7 +17,7 @@ fn shiny_prog(isect: &RayIsect, rng: &mut rand::ThreadRng) -> Option<Ray> {
             Some(Ray{origin: isect_pos + isect_normal.smul(EPSILON),
                      dir: reflect.normal()})
     } else {
-        // diffuse
+        // transmissive
         Some(isect.new_random_ray(rng))
     }
 }
@@ -58,38 +60,43 @@ fn glass_prog(isect: &RayIsect, rng: &mut rand::ThreadRng) -> Option<Ray> {
 }
 
 fn main() {
-    let mut scene: Vec<SceneObj> = vec![
+    let mut scene: Scene = Scene{
+        camera_position: Vec3{x:2., y:1., z:0.},
+        camera_orientation: Quaternion::from_axis_angle(&Vec3{x:-1., y:1., z:0.}, 0.4),
+        objs: Vec::new()
+    };
+    scene.objs = vec![
         // balls in scene
         SceneObj {
             prim: Primitive::Sphere(Vec3{x:0., y: -0.6, z: -4.}, 1.),
             mat: Material {
                 emissive: Color3f {r:0., g:0., b:0.},
-                diffuse: Color3f {r:1., g:1., b:1.},
-                isect_prog: glass_prog
+                transmissive: Color3f {r:1., g:1., b:1.},
+                path_program: glass_prog
             }
         },
         SceneObj {
             prim: Primitive::Sphere(Vec3 {x: 2., y:-1., z: -4.}, 0.5),
             mat: Material {
                 emissive: Color3f {r:0.,g:1.,b:0.},
-                diffuse: Color3f{r:1.,g:1.,b:1.},
-                isect_prog: glass_prog
+                transmissive: Color3f{r:1.,g:1.,b:1.},
+                path_program: glass_prog
             }
         },
         SceneObj {
             prim: Primitive::Sphere(Vec3 {x: -2., y:-1., z: -4.}, 0.5),
             mat: Material {
                 emissive: Color3f {r:1.,g:0.,b:0.},
-                diffuse: Color3f{r:1.,g:1.,b:1.},
-                isect_prog: glass_prog
+                transmissive: Color3f{r:1.,g:1.,b:1.},
+                path_program: glass_prog
             }
         },
         SceneObj {
             prim: Primitive::Sphere(Vec3 {x: 0., y:0., z: -4.}, 0.5),
             mat: Material {
                 emissive: Color3f {r:0.,g:0.,b:1.},
-                diffuse: Color3f{r:1.,g:1.,b:1.},
-                isect_prog: glass_prog
+                transmissive: Color3f{r:1.,g:1.,b:1.},
+                path_program: glass_prog
             }
         },
         // floor
@@ -99,8 +106,8 @@ fn main() {
                                       Vec3 {x: 100., y:-2., z: 0.}),
             mat: Material {
                 emissive: Color3f {r:0.,g:0.,b:0.},
-                diffuse: Color3f{r:1.,g:1.,b:1.},
-                isect_prog: shiny_prog
+                transmissive: Color3f{r:1.,g:1.,b:1.},
+                path_program: shiny_prog
             }
         },
         SceneObj {
@@ -109,8 +116,8 @@ fn main() {
                                       Vec3 {x: 100., y:-2., z: -100.}),
             mat: Material {
                 emissive: Color3f {r:0.,g:0.,b:0.},
-                diffuse: Color3f{r:1.,g:1.,b:1.},
-                isect_prog: shiny_prog
+                transmissive: Color3f{r:1.,g:1.,b:1.},
+                path_program: shiny_prog
             }
         },
         // back wall
@@ -120,8 +127,8 @@ fn main() {
                                       Vec3 {x: 100., y:-2., z: -10.}),
             mat: Material {
                 emissive: Color3f {r:0.,g:0.,b:0.},
-                diffuse: Color3f{r:1.,g:1.,b:1.},
-                isect_prog: shiny_prog
+                transmissive: Color3f{r:1.,g:1.,b:1.},
+                path_program: shiny_prog
             }
         },
         SceneObj {
@@ -130,8 +137,8 @@ fn main() {
                                       Vec3 {x: -100., y:-2., z: -10.}),
             mat: Material {
                 emissive: Color3f {r:0.,g:0.,b:0.},
-                diffuse: Color3f{r:1.,g:1.,b:1.},
-                isect_prog: shiny_prog
+                transmissive: Color3f{r:1.,g:1.,b:1.},
+                path_program: shiny_prog
             }
         },
         // light
@@ -139,15 +146,15 @@ fn main() {
             prim: Primitive::Sphere(Vec3 {x: 0., y:8., z: -4.}, 1.),
             mat: Material {
                 emissive: Color3f {r:1.,g:1.,b:1.},
-                diffuse: Color3f{r:1.,g:1.,b:1.},
-                isect_prog: shiny_prog
+                transmissive: Color3f{r:1.,g:1.,b:1.},
+                path_program: shiny_prog
             }
         }
     ];
 
     let mut time: f32 = 0.;
-    render_loop(&RenderConfig{threads:8, samples_per_first_isect: 20},
-                scene, |scene, photon_buffer| {
+    render_loop(&RenderConfig { threads:8, samples_per_first_isect: 20 },
+                &mut scene, |scene, photon_buffer| {
                     /*
         time += 0.1;
         scene[0].prim = Primitive::Sphere(Vec3{x:0., y: -0.6 + time.sin(), z: -4.}, 1.);

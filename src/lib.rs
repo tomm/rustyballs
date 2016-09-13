@@ -9,12 +9,14 @@ use sdl2::event::Event;
 use sdl2::keyboard::Keycode;
 use rand::Rng; // why did i need this for rng.gen?
 
+pub mod quaternion;
 pub mod vec3;
 pub mod color3f;
 pub mod raytracer;
+use quaternion::Quaternion;
 use vec3::Vec3;
 use color3f::Color3f;
-use raytracer::{EPSILON,RenderConfig,SceneObj,Primitive,Material,Ray,RayIsect,
+use raytracer::{EPSILON,RenderConfig,SceneObj,Primitive,Material,Ray,RayIsect,Scene,
 Path,IsectFrom,MAX_BOUNCES};
 
 fn ray_primitive_intersects<'a>(ray: &Ray, scene_obj: &'a SceneObj) -> Option<RayIsect<'a>> {
@@ -128,8 +130,8 @@ fn make_ray_scatter_path<'a>(ray: &Ray, scene: &'a Vec<SceneObj>, rng: &mut rand
             path.isects[path.num_bounces as usize] = isect.clone();
             path.num_bounces += 1;
             if path.num_bounces < MAX_BOUNCES as i32 {
-                // call material's isect_prog to see what our next ray will be
-                match (isect.scene_obj.mat.isect_prog)(&isect, rng) {
+                // call material's path_program to see what our next ray will be
+                match (isect.scene_obj.mat.path_program)(&isect, rng) {
                     Some(next_ray) => {
                         make_ray_scatter_path(&next_ray, scene, rng, path);
                     },
@@ -150,7 +152,7 @@ fn collect_light_from_path(path: &Path) -> Color3f {
             IsectFrom::Inside => (path.isects[i].ray.dir.normal()).dot(&surface_normal),
             IsectFrom::Outside => (-path.isects[i].ray.dir.normal()).dot(&surface_normal)
         };
-        let reflected = (color * path.isects[i].scene_obj.mat.diffuse).smul(cos_theta);
+        let reflected = (color * path.isects[i].scene_obj.mat.transmissive).smul(cos_theta);
 
         color = path.isects[i].scene_obj.mat.emissive + reflected;
     }
@@ -178,7 +180,7 @@ fn path_trace_rays(config: &RenderConfig, rays: &Vec<Ray>, scene: &Vec<SceneObj>
             let first_isect = path.isects[0].clone();
             for _ in 0..config.samples_per_first_isect {
                 path.num_bounces = 1;
-                match (first_isect.scene_obj.mat.isect_prog)(&first_isect, rng) {
+                match (first_isect.scene_obj.mat.path_program)(&first_isect, rng) {
                     Some(next_ray) => {
                         make_ray_scatter_path(&next_ray, scene, rng, &mut path);
                         photon_buffer[i] += collect_light_from_path(&path);
@@ -190,7 +192,8 @@ fn path_trace_rays(config: &RenderConfig, rays: &Vec<Ray>, scene: &Vec<SceneObj>
     }
 }
 
-fn make_eye_rays(width: i32, height: i32, y_bounds: (i32, i32), sub_pix: (f32, f32)) -> Vec<Ray> {
+fn make_eye_rays(camera_position: &Vec3, camera_orientation: &Quaternion,
+                 width: i32, height: i32, y_bounds: (i32, i32), sub_pix: (f32, f32)) -> Vec<Ray> {
     let fw = width as f32;
     let fh = height as f32;
     let aspect = fw / fh;
@@ -204,26 +207,29 @@ fn make_eye_rays(width: i32, height: i32, y_bounds: (i32, i32), sub_pix: (f32, f
     for y in y_bounds.0..y_bounds.1 {
         for x in 0..width {
             rays.push(Ray{
-                origin: Vec3::default(),
-                dir: (top_left + right_step.smul(x as f32) + down_step.smul(y as f32)).normal()
+                origin: *camera_position,
+                dir: camera_orientation.vmul(
+                    &(top_left + right_step.smul(x as f32) + down_step.smul(y as f32)).normal()
+                )
             });
         }
     }
     rays
 }
 
-fn path_trace_scene(config: &RenderConfig, scene: &Vec<SceneObj>, width: i32, height: i32,
+fn path_trace_scene(config: &RenderConfig, scene: &Scene, width: i32, height: i32,
                   y_bounds: (i32, i32), photon_buffer: &mut[Color3f],
                   rng: &mut rand::ThreadRng) {
     let subpix = (rng.gen::<f32>(), rng.gen::<f32>());
-    let eye_rays = make_eye_rays(width, height, y_bounds, subpix);
+    let eye_rays = make_eye_rays(&scene.camera_position, &scene.camera_orientation,
+                                 width, height, y_bounds, subpix);
 
     assert!(eye_rays.len() == photon_buffer.len());
 
     path_trace_rays(
         config,
         &eye_rays,
-        scene, rng, photon_buffer
+        &scene.objs, rng, photon_buffer
     );
 }
 
@@ -262,7 +268,7 @@ fn hdr_postprocess_blit(renderer: &mut sdl2::render::Renderer, photon_buffer: &[
     });
 }
 
-fn parallel_path_trace_scene(config: &RenderConfig, scene: &Vec<SceneObj>, width: u32, height: u32,
+fn parallel_path_trace_scene(config: &RenderConfig, scene: &Scene, width: u32, height: u32,
                              photon_buffer: &mut[Color3f]) {
     let chunks: Vec<_> = photon_buffer.chunks_mut((width * height) as usize / config.threads).collect();
 
@@ -283,59 +289,8 @@ fn parallel_path_trace_scene(config: &RenderConfig, scene: &Vec<SceneObj>, width
     });
 }
 
-fn shiny_prog(isect: &RayIsect, rng: &mut rand::ThreadRng) -> Option<Ray> {
-    let die = rng.gen::<f32>();
-    if die < 0.2 {
-        let isect_normal = isect_normal(isect);
-        let isect_pos = isect_pos(isect);
-            let reflect = isect.ray.dir - (isect_normal.smul(isect.ray.dir.dot(&isect_normal))).smul(2.);
-            Some(Ray{origin: isect_pos + isect_normal.smul(EPSILON),
-                     dir: reflect.normal()})
-    } else {
-        // diffuse
-        Some(new_random_ray_from_isect(isect, rng))
-    }
-}
-
-fn glass_prog(isect: &RayIsect, rng: &mut rand::ThreadRng) -> Option<Ray> {
-    let isect_normal = isect_normal(isect);
-    let isect_pos = isect_pos(isect);
-
-    // refraction
-    let norm: Vec3;
-    // refractive index of original medium
-    let n1: f32;
-    let n2: f32;
-    
-    match isect.from {
-        IsectFrom::Outside => {
-            n1 = 1.; n2 = 1.4;
-            norm = isect_normal;
-        },
-        IsectFrom::Inside => {
-            n1 = 1.4; n2 = 1.;
-            norm = -isect_normal;
-        }
-    };
-    // incoming angle too tight: reflect instead
-    if 1.+norm.dot(&isect.ray.dir) > rng.gen::<f32>() {
-        let reflect = isect.ray.dir - (isect_normal.smul(isect.ray.dir.dot(&isect_normal))).smul(2.);
-        return Some(Ray{origin: isect_pos + isect_normal.smul(EPSILON),
-                 dir: reflect.normal()});
-    }
-    let n: f32 = n1 / n2;
-    let c1 = -norm.dot(&isect.ray.dir);
-    let c2 = (1. - n*n * (1. - c1*c1)).sqrt();
-    let reflect_dir = (isect.ray.dir.smul(n) + norm.smul(n * c1 - c2)).normal();
-    // XXX sometimes this fails. could be on very edge of shape. investigate
-    //assert!(isect.ray.dir.dot(&reflect_dir) >= 0.);
-
-    Some(Ray{origin: isect_pos - norm.smul(EPSILON),
-             dir: reflect_dir})
-}
-
-pub fn render_loop<F>(config: &RenderConfig, mut scene: Vec<SceneObj>, mut pre_draw_callback: F)
-    where F: FnMut(&mut Vec<SceneObj>, &mut Vec<Color3f>) {
+pub fn render_loop<F>(config: &RenderConfig, mut scene: &mut Scene, mut pre_draw_callback: F)
+    where F: FnMut(&mut Scene, &mut Vec<Color3f>) {
 
     let sdl_context = sdl2::init().unwrap();
     let video_subsystem = sdl_context.video().unwrap();
