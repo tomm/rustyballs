@@ -39,29 +39,28 @@ impl Default for Primitive {
 }
 
 pub type PathProgram = fn(&RayIsect, &mut rand::ThreadRng) -> Option<Ray>;
+pub type ColorProgram = fn(&RayIsect) -> (Color3f, Color3f); // (transmissive, emissive)
 
 pub struct Material {
-    pub emissive: Color3f,
-    pub transmissive: Color3f,
+    pub color_program: ColorProgram,
     pub path_program: PathProgram
 }
 
 impl Clone for Material {
     fn clone(&self) -> Material {
         Material {
-            emissive: self.emissive,
-            transmissive: self.transmissive,
-            path_program: self.path_program
+            path_program: self.path_program,
+            color_program: self.color_program
         }
     }
 }
 
 fn default_path_program(isect: &RayIsect, rng: &mut rand::ThreadRng) -> Option<Ray> { None }
+fn default_color_program(isect: &RayIsect) -> (Color3f, Color3f) { (Color3f::default(), Color3f::default()) }
 impl Default for Material {
     fn default() -> Material {
         Material {
-            emissive: Color3f::default(),
-            transmissive: Color3f::default(),
+            color_program: default_color_program,
             path_program: default_path_program
         }
     }

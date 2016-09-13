@@ -152,9 +152,10 @@ fn collect_light_from_path(path: &Path) -> Color3f {
             IsectFrom::Inside => (path.isects[i].ray.dir.normal()).dot(&surface_normal),
             IsectFrom::Outside => (-path.isects[i].ray.dir.normal()).dot(&surface_normal)
         };
-        let reflected = (color * path.isects[i].scene_obj.mat.transmissive).smul(cos_theta);
+        let (transmissive, emissive) = (path.isects[i].scene_obj.mat.color_program)(&path.isects[i]);
+        let reflected = (color * transmissive).smul(cos_theta);
 
-        color = path.isects[i].scene_obj.mat.emissive + reflected;
+        color = emissive + reflected;
     }
 
     color

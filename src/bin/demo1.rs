@@ -8,7 +8,8 @@ use rustyballs::quaternion::Quaternion;
 use rustyballs::raytracer::{IsectFrom,Ray,RayIsect,RenderConfig,SceneObj,Primitive,
 Scene,Material,EPSILON};
 
-fn shiny_prog(isect: &RayIsect, rng: &mut rand::ThreadRng) -> Option<Ray> {
+// _pp = PathProgram
+fn mirror_pp(isect: &RayIsect, rng: &mut rand::ThreadRng) -> Option<Ray> {
     let die = rng.gen::<f32>();
     if die < 0.2 {
         let isect_normal = isect.normal();
@@ -22,7 +23,7 @@ fn shiny_prog(isect: &RayIsect, rng: &mut rand::ThreadRng) -> Option<Ray> {
     }
 }
 
-fn glass_prog(isect: &RayIsect, rng: &mut rand::ThreadRng) -> Option<Ray> {
+fn glass_pp(isect: &RayIsect, rng: &mut rand::ThreadRng) -> Option<Ray> {
     let isect_normal = isect.normal();
     let isect_pos = isect.hit_pos();
 
@@ -45,8 +46,13 @@ fn glass_prog(isect: &RayIsect, rng: &mut rand::ThreadRng) -> Option<Ray> {
     // incoming angle too tight: reflect instead
     if 1.+norm.dot(&isect.ray.dir) > rng.gen::<f32>() {
         let reflect = isect.ray.dir - (isect_normal.smul(isect.ray.dir.dot(&isect_normal))).smul(2.);
-        return Some(Ray{origin: isect_pos + isect_normal.smul(EPSILON),
-                 dir: reflect.normal()});
+        // causes artefacts if condition not met
+        if reflect.dot(&isect_normal) > EPSILON {
+            return Some(Ray{origin: isect_pos + isect_normal.smul(EPSILON),
+                     dir: reflect.normal()});
+        } else {
+            return None
+        }
     }
     let n: f32 = n1 / n2;
     let c1 = -norm.dot(&isect.ray.dir);
@@ -59,9 +65,25 @@ fn glass_prog(isect: &RayIsect, rng: &mut rand::ThreadRng) -> Option<Ray> {
              dir: reflect_dir})
 }
 
+// _cp = ColorProgram
+// returning (transmissive, emissive) colours
+fn white_cp(_: &RayIsect) -> (Color3f, Color3f) { (Color3f{r:1., g:1., b:1.}, Color3f::default()) }
+fn blue_light_cp(_: &RayIsect) -> (Color3f, Color3f) { (Color3f{r:1., g:1., b:1.}, Color3f{r:0., g:0., b:1.}) }
+fn green_light_cp(_: &RayIsect) -> (Color3f, Color3f) { (Color3f{r:1., g:1., b:1.}, Color3f{r:0., g:1., b:0.}) }
+fn red_light_cp(_: &RayIsect) -> (Color3f, Color3f) { (Color3f{r:1., g:1., b:1.}, Color3f{r:1., g:0., b:0.}) }
+fn bright_white_light_cp(_: &RayIsect) -> (Color3f, Color3f) { (Color3f{r:1., g:1., b:1.}, Color3f{r:10., g:10., b:10.}) }
+fn check_floor_cp(isect: &RayIsect) -> (Color3f, Color3f) {
+    let pos = isect.hit_pos();
+    if ((pos.x.floor() as i32 + pos.z.floor() as i32) & 1) == 0 {
+        (Color3f{r:1., g:1., b:1.}, Color3f::default())
+    } else {
+        (Color3f{r:0.5, g:0.5, b:0.5}, Color3f::default())
+    }
+}
+
 fn main() {
     let mut scene: Scene = Scene{
-        camera_position: Vec3{x:2., y:1., z:0.},
+        camera_position: Vec3{x:2., y:0.5, z:-1.},
         camera_orientation: Quaternion::from_axis_angle(&Vec3{x:-1., y:1., z:0.}, 0.4),
         objs: Vec::new()
     };
@@ -69,86 +91,50 @@ fn main() {
         // balls in scene
         SceneObj {
             prim: Primitive::Sphere(Vec3{x:0., y: -0.6, z: -4.}, 1.),
-            mat: Material {
-                emissive: Color3f {r:0., g:0., b:0.},
-                transmissive: Color3f {r:1., g:1., b:1.},
-                path_program: glass_prog
-            }
+            mat: Material { color_program: white_cp, path_program: glass_pp }
         },
         SceneObj {
             prim: Primitive::Sphere(Vec3 {x: 2., y:-1., z: -4.}, 0.5),
-            mat: Material {
-                emissive: Color3f {r:0.,g:1.,b:0.},
-                transmissive: Color3f{r:1.,g:1.,b:1.},
-                path_program: glass_prog
-            }
+            mat: Material { color_program: green_light_cp, path_program: glass_pp }
         },
         SceneObj {
             prim: Primitive::Sphere(Vec3 {x: -2., y:-1., z: -4.}, 0.5),
-            mat: Material {
-                emissive: Color3f {r:1.,g:0.,b:0.},
-                transmissive: Color3f{r:1.,g:1.,b:1.},
-                path_program: glass_prog
-            }
+            mat: Material { color_program: red_light_cp, path_program: glass_pp }
         },
         SceneObj {
             prim: Primitive::Sphere(Vec3 {x: 0., y:0., z: -4.}, 0.5),
-            mat: Material {
-                emissive: Color3f {r:0.,g:0.,b:1.},
-                transmissive: Color3f{r:1.,g:1.,b:1.},
-                path_program: glass_prog
-            }
+            mat: Material { color_program: blue_light_cp, path_program: glass_pp }
         },
         // floor
         SceneObj {
             prim: Primitive::Triangle(Vec3 {x: -100., y:-2., z: 0.},
                                       Vec3 {x: -100., y:-2., z: -100.},
                                       Vec3 {x: 100., y:-2., z: 0.}),
-            mat: Material {
-                emissive: Color3f {r:0.,g:0.,b:0.},
-                transmissive: Color3f{r:1.,g:1.,b:1.},
-                path_program: shiny_prog
-            }
+            mat: Material { color_program: check_floor_cp, path_program: mirror_pp }
         },
         SceneObj {
             prim: Primitive::Triangle(Vec3 {x: 100., y:-2., z: 0.},
                                       Vec3 {x: -100., y:-2., z: -100.},
                                       Vec3 {x: 100., y:-2., z: -100.}),
-            mat: Material {
-                emissive: Color3f {r:0.,g:0.,b:0.},
-                transmissive: Color3f{r:1.,g:1.,b:1.},
-                path_program: shiny_prog
-            }
+            mat: Material { color_program: check_floor_cp, path_program: mirror_pp }
         },
         // back wall
         SceneObj {
             prim: Primitive::Triangle(Vec3 {x: -100., y:-2., z: -10.},
                                       Vec3 {x: 100., y:100., z: -10.},
                                       Vec3 {x: 100., y:-2., z: -10.}),
-            mat: Material {
-                emissive: Color3f {r:0.,g:0.,b:0.},
-                transmissive: Color3f{r:1.,g:1.,b:1.},
-                path_program: shiny_prog
-            }
+            mat: Material { color_program: white_cp, path_program: mirror_pp }
         },
         SceneObj {
             prim: Primitive::Triangle(Vec3 {x: 100., y:100., z: -20.},
                                       Vec3 {x: -100., y:100., z: -10.},
                                       Vec3 {x: -100., y:-2., z: -10.}),
-            mat: Material {
-                emissive: Color3f {r:0.,g:0.,b:0.},
-                transmissive: Color3f{r:1.,g:1.,b:1.},
-                path_program: shiny_prog
-            }
+            mat: Material { color_program: white_cp, path_program: mirror_pp }
         },
         // light
         SceneObj {
             prim: Primitive::Sphere(Vec3 {x: 0., y:8., z: -4.}, 1.),
-            mat: Material {
-                emissive: Color3f {r:1.,g:1.,b:1.},
-                transmissive: Color3f{r:1.,g:1.,b:1.},
-                path_program: shiny_prog
-            }
+            mat: Material { color_program: bright_white_light_cp, path_program: mirror_pp }
         }
     ];
 
