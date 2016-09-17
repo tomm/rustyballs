@@ -13,6 +13,10 @@ pub struct Ray {
     pub dir: Vec3
 }
 
+pub fn random_normal(rng: &mut rand::ThreadRng) -> Vec3 {
+    Vec3 {x: 0.5-rng.gen::<f32>(), y: 0.5-rng.gen::<f32>(), z: 0.5-rng.gen::<f32>()}.normal()
+}
+
 pub struct RenderConfig {
     pub threads: usize,
     pub samples_per_first_isect: u32
@@ -29,7 +33,8 @@ impl Default for RenderConfig {
 #[derive(Clone)]
 pub enum Primitive {
     Sphere(Vec3, f32),
-    Triangle(Vec3, Vec3, Vec3)
+    Triangle(Vec3, Vec3, Vec3),
+    ScatterEvent
 }
 
 impl Default for Primitive {
@@ -38,8 +43,14 @@ impl Default for Primitive {
     }
 }
 
+pub enum VacuumAction<'a> {
+    Continue,
+    Scatter(RayIsect<'a>)
+}
+
 pub type PathProgram = fn(&RayIsect, &mut rand::ThreadRng) -> Option<Ray>;
 pub type ColorProgram = fn(&RayIsect) -> (Color3f, Color3f); // (transmissive, emissive)
+pub type VacuumProgram<'a> = fn(&RayIsect, &mut rand::ThreadRng) -> VacuumAction<'a>;
 
 pub struct Material {
     pub color_program: ColorProgram,
@@ -66,10 +77,11 @@ impl Default for Material {
     }
 }
 
-pub struct Scene {
+pub struct Scene<'a> {
     pub camera_position: Vec3,
     pub camera_orientation: Quaternion,
-    pub objs: Vec<SceneObj>
+    pub objs: Vec<SceneObj>,
+    pub vacuum_program: Option<VacuumProgram<'a>>
 }
 
 #[derive(Clone,Default)]
@@ -96,7 +108,8 @@ impl<'a> RayIsect<'a> {
     pub fn normal(&self) -> Vec3 {
         match self.scene_obj.prim {
             Primitive::Sphere(origin, _) => (self.hit_pos() - origin).normal(),
-            Primitive::Triangle(v1, v2, v3) => (v2-v1).cross(&(v2-v3)).normal()
+            Primitive::Triangle(v1, v2, v3) => (v2-v1).cross(&(v2-v3)).normal(),
+            Primitive::ScatterEvent => -self.ray.dir.normal()
         }
     }
     pub fn new_random_ray(&self, rng: &mut rand::ThreadRng) -> Ray {
@@ -115,11 +128,11 @@ fn flip_vector_to_hemisphere(flipee: &Vec3, norm: &Vec3) -> Vec3 {
     }
 }
 
-fn random_vector_in_hemisphere(norm: &Vec3, rng: &mut rand::ThreadRng) -> Vec3 {
+pub fn random_vector_in_hemisphere(norm: &Vec3, rng: &mut rand::ThreadRng) -> Vec3 {
     flip_vector_to_hemisphere(
-        &Vec3 {x: 0.5-rng.gen::<f32>(), y: 0.5-rng.gen::<f32>(), z: 0.5-rng.gen::<f32>()},
+        &random_normal(rng),
         norm
-    ).normal()
+    )
 }
 
 pub const MAX_BOUNCES: usize = 6;

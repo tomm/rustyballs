@@ -3,6 +3,10 @@ extern crate rand;
 extern crate time;
 extern crate crossbeam;
 
+use std::mem;
+use std::slice;
+use std::fs::File;
+use std::io::prelude::*;
 use sdl2::rect::Rect;
 use sdl2::pixels::Color;
 use sdl2::event::Event;
@@ -16,7 +20,7 @@ pub mod raytracer;
 use quaternion::Quaternion;
 use vec3::Vec3;
 use color3f::Color3f;
-use raytracer::{EPSILON,RenderConfig,SceneObj,Primitive,Material,Ray,RayIsect,Scene,
+use raytracer::{VacuumAction,EPSILON,RenderConfig,SceneObj,Primitive,Material,Ray,RayIsect,Scene,
 Path,IsectFrom,MAX_BOUNCES};
 
 fn ray_primitive_intersects<'a>(ray: &Ray, scene_obj: &'a SceneObj) -> Option<RayIsect<'a>> {
@@ -65,6 +69,7 @@ fn ray_primitive_intersects<'a>(ray: &Ray, scene_obj: &'a SceneObj) -> Option<Ra
                 None
             }
         }
+        Primitive::ScatterEvent => None
     }
 }
 
@@ -91,17 +96,6 @@ fn find_first_intersection<'a>(ray: &Ray, scene: &'a Vec<SceneObj>) -> Option<Ra
     nearest
 }
 
-fn isect_pos(isect: &RayIsect) -> Vec3 {
-    isect.ray.origin + isect.ray.dir.smul(isect.dist)
-}
-
-fn isect_normal(isect: &RayIsect) -> Vec3 {
-    match isect.scene_obj.prim {
-        Primitive::Sphere(origin, _) => (isect_pos(isect) - origin).normal(),
-        Primitive::Triangle(v1, v2, v3) => (v2-v1).cross(&(v2-v3)).normal()
-    }
-}
-
 fn flip_vector_to_hemisphere(flipee: &Vec3, norm: &Vec3) -> Vec3 {
     if flipee.dot(norm) > 0. {
         *flipee
@@ -118,16 +112,28 @@ fn random_vector_in_hemisphere(norm: &Vec3, rng: &mut rand::ThreadRng) -> Vec3 {
 }
 
 fn new_random_ray_from_isect(isect: &RayIsect, rng: &mut rand::ThreadRng) -> Ray {
-    let last_isect_norm = isect_normal(isect);
-    let ray_start_pos = isect_pos(isect) + last_isect_norm.smul(EPSILON);
+    let last_isect_norm = isect.normal();
+    let ray_start_pos = isect.hit_pos() + last_isect_norm.smul(EPSILON);
     let rand_dir = random_vector_in_hemisphere(&last_isect_norm, rng);
     Ray {origin: ray_start_pos, dir: rand_dir}
 }
 
-fn make_ray_scatter_path<'a>(ray: &Ray, scene: &'a Vec<SceneObj>, rng: &mut rand::ThreadRng, path: &mut Path<'a>) {
-    match find_first_intersection(ray, scene) {
+fn make_ray_scatter_path<'a>(ray: &Ray, scene: &'a Scene, rng: &mut rand::ThreadRng, path: &mut Path<'a>) {
+    match find_first_intersection(ray, &scene.objs) {
         Some(isect) => {
             path.isects[path.num_bounces as usize] = isect.clone();
+            match scene.vacuum_program {
+                Some(prog) => {
+                    match (prog)(&isect, rng) {
+                        VacuumAction::Continue => {},
+                        VacuumAction::Scatter(new_isect) => {
+                            // replace intersection with a scattering
+                            path.isects[path.num_bounces as usize] = new_isect.clone();
+                        }
+                    }
+                },
+                None => {}
+            };
             path.num_bounces += 1;
             if path.num_bounces < MAX_BOUNCES as i32 {
                 // call material's path_program to see what our next ray will be
@@ -147,13 +153,13 @@ fn collect_light_from_path(path: &Path) -> Color3f {
     let mut color = Color3f::default();
 
     for i in (0..path.num_bounces as usize).rev() {
-        let surface_normal = isect_normal(&path.isects[i]);
-        let cos_theta = match path.isects[i].from {
+        let surface_normal = &path.isects[i].normal();
+        /*let cos_theta = match path.isects[i].from {
             IsectFrom::Inside => (path.isects[i].ray.dir.normal()).dot(&surface_normal),
             IsectFrom::Outside => (-path.isects[i].ray.dir.normal()).dot(&surface_normal)
-        };
+        };*/
         let (transmissive, emissive) = (path.isects[i].scene_obj.mat.color_program)(&path.isects[i]);
-        let reflected = (color * transmissive).smul(cos_theta);
+        let reflected = (color * transmissive);//.smul(cos_theta);
 
         color = emissive + reflected;
     }
@@ -161,12 +167,12 @@ fn collect_light_from_path(path: &Path) -> Color3f {
     color
 }
 
-fn path_trace_rays(config: &RenderConfig, rays: &Vec<Ray>, scene: &Vec<SceneObj>,
+fn path_trace_rays(config: &RenderConfig, rays: &Vec<Ray>, scene: &Scene,
                    rng: &mut rand::ThreadRng, photon_buffer: &mut [Color3f]) {
 
     let mut path = Path {
         num_bounces: 0,
-        isects: [RayIsect{from: IsectFrom::Outside, ray:Ray::default(), dist: 0., scene_obj: &scene[0]}; MAX_BOUNCES]
+        isects: [RayIsect{from: IsectFrom::Outside, ray:Ray::default(), dist: 0., scene_obj: &scene.objs[0]}; MAX_BOUNCES]
     };
     // could have initted unsafely (and maybe unwisely) like this also:
     // unsafe { path = std::mem::uninitialized(); }
@@ -230,7 +236,7 @@ fn path_trace_scene(config: &RenderConfig, scene: &Scene, width: i32, height: i3
     path_trace_rays(
         config,
         &eye_rays,
-        &scene.objs, rng, photon_buffer
+        scene, rng, photon_buffer
     );
 }
 
@@ -244,9 +250,9 @@ fn render_pixels<F>(renderer: &mut sdl2::render::Renderer, photon_buffer: &[Colo
         for x in 0..output_size.1 {
             let col = color_transform_fn(&photon_buffer[(x + output_size.0*y) as usize]);
             renderer.set_draw_color(Color::RGB(
-                (255.*col.r) as u8,
-                (255.*col.g) as u8,
-                (255.*col.b) as u8
+                col.r as u8,
+                col.g as u8,
+                col.b as u8
             ));
             renderer.fill_rect(Rect::new(x as i32, y as i32, 1, 1)).unwrap();
         }
@@ -262,7 +268,7 @@ fn hdr_postprocess_blit(renderer: &mut sdl2::render::Renderer, photon_buffer: &[
         if col.b > max_color { max_color = col.b; }
     }
 
-    let brightness = 1. / (1.+max_color).ln();
+    let brightness = 255. / (1.+max_color).ln();
 
     render_pixels(renderer, photon_buffer, |c: &Color3f| {
         Color3f {r: (c.r+1.).ln(), g: (c.g+1.).ln(), b: (c.b+1.).ln()}.smul(brightness)
@@ -290,8 +296,75 @@ fn parallel_path_trace_scene(config: &RenderConfig, scene: &Scene, width: u32, h
     });
 }
 
+fn normalize_photon_buffer(photon_buffer: &Vec<Color3f>) -> (Vec<Color3f>, f32) {
+    let mut buf = photon_buffer.clone();
+
+    // normalize colour values to [0..1]
+    let mut max_value: f32 = 0.;
+    for c in buf.iter() {
+        if c.max_channel() > max_value {
+            max_value = c.max_channel()
+        }
+    }
+    for c in buf.iter_mut() {
+        *c = Color3f {r: c.r / max_value, g: c.g / max_value, b: c.b / max_value};
+    }
+    (buf, max_value)
+}
+
+fn save_photon_buffer(stat_samples: u32, img_size: (u32, u32), photon_buffer: &Vec<Color3f>) {
+    let (buf, max_value) = normalize_photon_buffer(photon_buffer);
+
+    let t = time::precise_time_ns();
+
+    {
+        // write raw float data
+        let filename = format!("img_{}_{}_samples.raw", t, stat_samples);
+        println!("Writing raw float32 image data to {}", filename);
+        let mut f = match File::create(&filename) {
+            Ok(file) => file,
+            Err(err) => return
+        };
+
+
+        // need to dirty-cast our Vec<Color3f> to [u8]
+        let _c: *const Color3f = &buf[0];
+        let _u: *const u8 = _c as *const _;
+        let us: &[u8] = unsafe {
+            slice::from_raw_parts(_u, buf.len() * mem::size_of::<Color3f>())
+        };
+        f.write_all(us);
+        f.sync_data();
+    }
+
+    {
+        let filename = format!("img_{}_{}_samples.ppm", t, stat_samples);
+        println!("Writing RGB tone-mapped image to {}", filename);
+        let mut f = match File::create(&filename) {
+            Ok(file) => file,
+            Err(err) => return
+        };
+
+        // XXX get proper dimensions!
+        f.write_all(format!("P6 {} {} 255\n", img_size.0, img_size.1).as_bytes());
+
+        // write log mapped u8 data (as displayed)
+        let brightness = 255. / (1.+max_value).ln();
+        let mut rgb: Vec<u8> = Vec::new();
+        for c in photon_buffer.iter() {
+            rgb.push(((c.r+1.).ln() * brightness) as u8);
+            rgb.push(((c.g+1.).ln() * brightness) as u8);
+            rgb.push(((c.b+1.).ln() * brightness) as u8);
+        }
+        f.write_all(&rgb);
+        f.sync_data();
+    }
+}
+
 pub fn render_loop<F>(config: &RenderConfig, mut scene: &mut Scene, mut pre_draw_callback: F)
     where F: FnMut(&mut Scene, &mut Vec<Color3f>) {
+
+    println!("Keys: <esc> to quit, <s> to dump raw image");
 
     let sdl_context = sdl2::init().unwrap();
     let video_subsystem = sdl_context.video().unwrap();
@@ -303,6 +376,7 @@ pub fn render_loop<F>(config: &RenderConfig, mut scene: &mut Scene, mut pre_draw
     let mut renderer = window.renderer().build().unwrap();
 
     let output_size = renderer.output_size().unwrap();
+    let mut stats_samples_per_pixel: u32 = 0;
     let mut event_pump = sdl_context.event_pump().unwrap();
     let mut photon_buffer = vec![Color3f::default(); (output_size.0 * output_size.1) as usize];
 
@@ -312,6 +386,9 @@ pub fn render_loop<F>(config: &RenderConfig, mut scene: &mut Scene, mut pre_draw
                 Event::Quit {..} | Event::KeyDown { keycode: Some(Keycode::Escape), .. } => {
                     break 'running
                 },
+                Event::KeyDown { keycode: Some(Keycode::S), .. } => {
+                    save_photon_buffer(stats_samples_per_pixel, output_size, &photon_buffer);
+                }
                 _ => {}
             }
         }
@@ -324,7 +401,9 @@ pub fn render_loop<F>(config: &RenderConfig, mut scene: &mut Scene, mut pre_draw
         hdr_postprocess_blit(&mut renderer, &photon_buffer);
 
         let t_ = time::precise_time_ns();
-        println!("{} ms per frame, {} paths per second.",
+        stats_samples_per_pixel += 1 + config.samples_per_first_isect;
+        println!("{} accumulated samples per pixel. {} ms per frame, {} paths per second.",
+                 stats_samples_per_pixel,
                  (t_ - t)/1000000,
                  ((1000000000u64 * (output_size.0 * output_size.1 * (1u32+config.samples_per_first_isect)) as u64) / (t_ - t))
         );

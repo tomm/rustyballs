@@ -12,6 +12,14 @@ impl Color3f {
     pub fn smul(self, num: f32) -> Color3f {
         Color3f {r: self.r*num, g: self.g*num, b: self.b*num}
     }
+    pub fn black() -> Color3f { Color3f{r:0.,g:0.,b:0.} }
+    pub fn max_channel(&self) -> f32 {
+        if self.r > self.g {
+            if self.r > self.b {self.r} else {self.b}
+        } else {
+            if self.g > self.b {self.g} else {self.b}
+        }
+    }
 }
 
 impl Add for Color3f {
