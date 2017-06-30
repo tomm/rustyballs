@@ -69,6 +69,19 @@ fn ray_primitive_intersects<'a>(ray: &Ray, scene_obj: &'a SceneObj) -> Option<Ra
                 None
             }
         }
+        Primitive::Plane(center, normal) => {
+            let denom = normal.dot(&ray.dir);
+            if denom.abs() > EPSILON {
+                let t: f32 = (center - ray.origin).dot(&normal) / denom;
+                if t >= 0. {
+                    Some(RayIsect{from: IsectFrom::Outside, dist:t, scene_obj: &scene_obj, ray: ray.clone()})
+                } else {
+                    None
+                }
+            } else {
+                None
+            }
+        }
         Primitive::ScatterEvent => None
     }
 }
@@ -154,14 +167,20 @@ fn collect_light_from_path(path: &Path) -> Color3f {
 
     for i in (0..path.num_bounces as usize).rev() {
         let surface_normal = &path.isects[i].normal();
-        /*let cos_theta = match path.isects[i].from {
-            IsectFrom::Inside => (path.isects[i].ray.dir.normal()).dot(&surface_normal),
-            IsectFrom::Outside => (-path.isects[i].ray.dir.normal()).dot(&surface_normal)
-        };*/
         let (transmissive, emissive) = (path.isects[i].scene_obj.mat.color_program)(&path.isects[i]);
-        let reflected = (color * transmissive);//.smul(cos_theta);
+        let mut cos_theta;
+        
+        if i < (path.num_bounces-1) as usize {
+            cos_theta = match path.isects[i+1].from {
+                IsectFrom::Inside => (-path.isects[i+1].ray.dir).dot(&surface_normal),
+                IsectFrom::Outside => path.isects[i+1].ray.dir.dot(&surface_normal)
+            };
+        } else {
+            cos_theta = 1.;
+        }
+        if cos_theta < 0. { cos_theta = 0.; }
 
-        color = emissive + reflected;
+        color = emissive + (color * transmissive).smul(cos_theta);
     }
 
     color
@@ -204,6 +223,7 @@ fn make_eye_rays(camera_position: &Vec3, camera_orientation: &Quaternion,
     let fw = width as f32;
     let fh = height as f32;
     let aspect = fw / fh;
+    let fov = 3.14 / 2.0;
     let top_left_2 = Vec3 {x:-aspect, y:1., z:-1.};
     let right_step = Vec3 {x:2.*aspect, y:0., z:0.}.smul(1. / (fw-1.));
     let down_step = Vec3 {x:0., y:-2., z:0.}.smul(1. / (fh-1.));

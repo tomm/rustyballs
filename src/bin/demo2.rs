@@ -33,7 +33,7 @@ fn vacuum_program<'a>(isect: &RayIsect, rng: &mut rand::ThreadRng) -> VacuumActi
         let point: Vec3 = planet_pos - isect.ray.origin - isect.ray.dir.smul(sample_dist);
         let distance_from_planet = point.length() - 1.5 /*planet radius*/;
 
-        if rng.gen::<f32>() < (-3.-10.*distance_from_planet).exp() {
+        if rng.gen::<f32>() < (-1.-8.*distance_from_planet).exp() {
             return VacuumAction::Scatter(
                 // return new isect to replace 'isect'
                 RayIsect {
@@ -85,7 +85,7 @@ fn main() {
         },
     ];
 
-    render_loop(&RenderConfig { threads:8, samples_per_first_isect: 19 },
+    render_loop(&RenderConfig { threads:8, samples_per_first_isect: 1000 },
                 &mut scene, |scene, photon_buffer| {
     });
 }

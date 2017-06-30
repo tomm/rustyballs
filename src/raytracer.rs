@@ -14,7 +14,13 @@ pub struct Ray {
 }
 
 pub fn random_normal(rng: &mut rand::ThreadRng) -> Vec3 {
-    Vec3 {x: 0.5-rng.gen::<f32>(), y: 0.5-rng.gen::<f32>(), z: 0.5-rng.gen::<f32>()}.normal()
+    loop {
+        let v = Vec3 {x: 1.-2.*rng.gen::<f32>(), y: 1.0-2.*rng.gen::<f32>(), z: 1.-2.*rng.gen::<f32>()};
+        let len_sqr = v.x*v.x + v.y*v.y + v.z*v.z;
+        if len_sqr <= 1. {
+            return v.smul(1./len_sqr.sqrt());
+        }
+    }
 }
 
 pub struct RenderConfig {
@@ -34,6 +40,7 @@ impl Default for RenderConfig {
 pub enum Primitive {
     Sphere(Vec3, f32),
     Triangle(Vec3, Vec3, Vec3),
+    Plane(Vec3, Vec3),  // (position, origin)
     ScatterEvent
 }
 
@@ -109,6 +116,7 @@ impl<'a> RayIsect<'a> {
         match self.scene_obj.prim {
             Primitive::Sphere(origin, _) => (self.hit_pos() - origin).normal(),
             Primitive::Triangle(v1, v2, v3) => (v2-v1).cross(&(v2-v3)).normal(),
+            Primitive::Plane(_, normal) => normal,
             Primitive::ScatterEvent => -self.ray.dir.normal()
         }
     }
