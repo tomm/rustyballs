@@ -332,14 +332,14 @@ fn normalize_photon_buffer(photon_buffer: &Vec<Color3f>) -> (Vec<Color3f>, f32) 
     (buf, max_value)
 }
 
-fn save_photon_buffer(stat_samples: u32, img_size: (u32, u32), photon_buffer: &Vec<Color3f>) {
+pub fn dump_image(file_prefix: &str, img_size: (u32, u32), photon_buffer: &Vec<Color3f>) {
     let (buf, max_value) = normalize_photon_buffer(photon_buffer);
 
     let t = time::precise_time_ns();
 
     {
         // write raw float data
-        let filename = format!("img_{}_{}_samples.raw", t, stat_samples);
+        let filename = format!("{}.raw", file_prefix);
         println!("Writing raw float32 image data to {}", filename);
         let mut f = match File::create(&filename) {
             Ok(file) => file,
@@ -358,7 +358,7 @@ fn save_photon_buffer(stat_samples: u32, img_size: (u32, u32), photon_buffer: &V
     }
 
     {
-        let filename = format!("img_{}_{}_samples.ppm", t, stat_samples);
+        let filename = format!("{}.ppm", file_prefix);
         println!("Writing RGB tone-mapped image to {}", filename);
         let mut f = match File::create(&filename) {
             Ok(file) => file,
@@ -381,14 +381,20 @@ fn save_photon_buffer(stat_samples: u32, img_size: (u32, u32), photon_buffer: &V
     }
 }
 
-pub fn render_loop<F>(config: &RenderConfig, mut scene: &mut Scene, mut pre_draw_callback: F)
+fn save_photon_buffer(stat_samples: u32, img_size: (u32, u32), photon_buffer: &Vec<Color3f>) {
+    let t = time::precise_time_ns();
+    let file_prefix = format!("img_{}_{}_samples", t, stat_samples);
+    dump_image(&file_prefix, img_size, photon_buffer)
+}
+
+pub fn render_loop<F>(iterations: i32, config: &RenderConfig, mut scene: &mut Scene, mut pre_draw_callback: F) -> Vec<Color3f>
     where F: FnMut(&mut Scene, &mut Vec<Color3f>) {
 
     println!("Keys: <esc> to quit, <s> to dump raw image");
 
     let sdl_context = sdl2::init().unwrap();
     let video_subsystem = sdl_context.video().unwrap();
-    let window = video_subsystem.window("RUSTY BALLS!!", 512, 512)
+    let window = video_subsystem.window("RUSTY BALLS!!", config.image_size.0, config.image_size.1)
         .position_centered()
         //.opengl()
         .build()
@@ -400,7 +406,7 @@ pub fn render_loop<F>(config: &RenderConfig, mut scene: &mut Scene, mut pre_draw
     let mut event_pump = sdl_context.event_pump().unwrap();
     let mut photon_buffer = vec![Color3f::default(); (output_size.0 * output_size.1) as usize];
 
-    'running: loop {
+    'running: for i in 0..iterations {
         for event in event_pump.poll_iter() {
             match event {
                 Event::Quit {..} | Event::KeyDown { keycode: Some(Keycode::Escape), .. } => {
@@ -429,4 +435,6 @@ pub fn render_loop<F>(config: &RenderConfig, mut scene: &mut Scene, mut pre_draw
         );
         renderer.present();
     }
+    
+    photon_buffer
 }

@@ -2,6 +2,7 @@ extern crate rand;
 extern crate rustyballs;
 use rand::Rng; // why did i need this for rng.gen?
 use rustyballs::render_loop;
+use rustyballs::dump_image;
 use rustyballs::vec3::Vec3;
 use rustyballs::color3f::Color3f;
 use rustyballs::quaternion::Quaternion;
@@ -195,8 +196,8 @@ fn main() {
     ];
 
     let mut time: f32 = 0.;
-    render_loop(&RenderConfig { threads:8, samples_per_first_isect: 19 },
-                &mut scene, |scene, photon_buffer| {
+    let render_config = RenderConfig { threads:8, samples_per_first_isect: 19, image_size: (256, 256) };
+    let img = render_loop(4, &render_config, &mut scene, |scene, photon_buffer| {
                     /*
         time += 0.1;
         scene[0].prim = Primitive::Sphere(Vec3{x:0., y: -0.6 + time.sin(), z: -4.}, 1.);
@@ -207,4 +208,6 @@ fn main() {
         for c in photon_buffer.iter_mut() { *c = Color3f::default() }
         */
     });
+
+    dump_image("turdpile", render_config.image_size, &img);    
 }
