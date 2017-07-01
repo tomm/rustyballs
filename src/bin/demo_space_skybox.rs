@@ -2,11 +2,13 @@ extern crate rand;
 extern crate rustyballs;
 use rand::Rng; // why did i need this for rng.gen?
 use rustyballs::render_scene;
+use rustyballs::dump_hdr_postprocessed_image;
+use rustyballs::max_value_of_photon_buffer;
 use rustyballs::vec3::Vec3;
 use rustyballs::color3f::Color3f;
 use rustyballs::quaternion::Quaternion;
-use rustyballs::raytracer::{Camera,random_vector_in_hemisphere,random_normal,VacuumAction,IsectFrom,Ray,RayIsect,RenderConfig,SceneObj,Primitive,
-Scene,Material,EPSILON};
+use rustyballs::raytracer::{random_vector_in_hemisphere,random_normal,VacuumAction,IsectFrom,Ray,RayIsect,RenderConfig,SceneObj,Primitive,
+Scene,Camera,Material,EPSILON};
 
 // _pp = PathProgram
 fn semi_mirror_pp(isect: &RayIsect, rng: &mut rand::ThreadRng) -> Option<Ray> {
@@ -191,10 +193,48 @@ fn main() {
         },
     ];
 
-    render_scene(
-        1000000,
-        &RenderConfig { threads:8, samples_per_first_isect: 19, image_size: (512, 512) },
-        &Camera { position: Vec3{x:0.0, y:1.5, z:-1.}, orientation: Quaternion::from_axis_angle(&Vec3{x:-1., y:0., z:0.}, 0.2) },
-        &scene
+    let render_config = RenderConfig { threads:8, samples_per_first_isect: 19, image_size: (512, 512) };
+
+    let camera = Camera {
+        position: Vec3{x:0.0, y:1.5, z:-1.},
+        orientation: Quaternion::from_axis_angle(&Vec3{x:-1., y:0., z:0.}, 0.2)
+    };
+
+    render_skybox("vrdemosky", 4, &render_config, &camera, &scene);
+}
+
+fn render_skybox(file_prefix: &str, iterations: i32, render_config: &RenderConfig, camera: &Camera, scene: &Scene)
+{
+    // nasty. remove camera setup from scene object
+    let mut face_cam = *camera;
+
+    let img_fr = render_scene(iterations, &render_config, &face_cam, &scene);
+    face_cam.orientation = camera.orientation * Quaternion::from_axis_angle(&Vec3{x:1., y:0., z:0.}, 0.5*std::f32::consts::PI);
+    let img_up = render_scene(iterations, &render_config, &face_cam, &scene);
+    face_cam.orientation = camera.orientation * Quaternion::from_axis_angle(&Vec3{x:1., y:0., z:0.}, -0.5*std::f32::consts::PI);
+    let img_dn = render_scene(iterations, &render_config, &face_cam, &scene);
+    face_cam.orientation = camera.orientation * Quaternion::from_axis_angle(&Vec3{x:0., y:1., z:0.}, -0.5*std::f32::consts::PI);
+    let img_rt = render_scene(iterations, &render_config, &face_cam, &scene);
+    face_cam.orientation = camera.orientation * Quaternion::from_axis_angle(&Vec3{x:0., y:1., z:0.}, 0.5*std::f32::consts::PI);
+    let img_lf = render_scene(iterations, &render_config, &face_cam, &scene);
+    face_cam.orientation = camera.orientation * Quaternion::from_axis_angle(&Vec3{x:0., y:1., z:0.}, std::f32::consts::PI);
+    let img_bk = render_scene(iterations, &render_config, &face_cam, &scene);
+    
+    // to hdr-postprocess all 6 cube faces the same we need to find the max colour value of all of them
+    let max_value = max_value_of_photon_buffer(&img_fr).max(
+        max_value_of_photon_buffer(&img_up).max(
+            max_value_of_photon_buffer(&img_dn).max(
+                max_value_of_photon_buffer(&img_rt).max(
+                    max_value_of_photon_buffer(&img_lf).max(max_value_of_photon_buffer(&img_bk))
+                )
+            )
+        )
     );
+
+    dump_hdr_postprocessed_image(&format!("{}_fr", file_prefix), render_config.image_size, max_value, &img_fr);
+    dump_hdr_postprocessed_image(&format!("{}_bk", file_prefix), render_config.image_size, max_value, &img_bk);
+    dump_hdr_postprocessed_image(&format!("{}_up", file_prefix), render_config.image_size, max_value, &img_up);
+    dump_hdr_postprocessed_image(&format!("{}_dn", file_prefix), render_config.image_size, max_value, &img_dn);
+    dump_hdr_postprocessed_image(&format!("{}_lf", file_prefix), render_config.image_size, max_value, &img_lf);
+    dump_hdr_postprocessed_image(&format!("{}_rt", file_prefix), render_config.image_size, max_value, &img_rt);
 }

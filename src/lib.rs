@@ -20,7 +20,7 @@ pub mod raytracer;
 use quaternion::Quaternion;
 use vec3::Vec3;
 use color3f::Color3f;
-use raytracer::{VacuumAction,EPSILON,RenderConfig,SceneObj,Primitive,Material,Ray,RayIsect,Scene,
+use raytracer::{VacuumAction,EPSILON,RenderConfig,SceneObj,Primitive,Material,Ray,RayIsect,Scene,Camera,
 Path,IsectFrom,MAX_BOUNCES};
 
 fn ray_primitive_intersects<'a>(ray: &Ray, scene_obj: &'a SceneObj) -> Option<RayIsect<'a>> {
@@ -244,11 +244,11 @@ fn make_eye_rays(camera_position: &Vec3, camera_orientation: &Quaternion,
     rays
 }
 
-fn path_trace_scene(config: &RenderConfig, scene: &Scene, width: i32, height: i32,
+fn path_trace_scene(config: &RenderConfig, camera: &Camera, scene: &Scene, width: i32, height: i32,
                   y_bounds: (i32, i32), photon_buffer: &mut[Color3f],
                   rng: &mut rand::ThreadRng) {
     let subpix = (rng.gen::<f32>(), rng.gen::<f32>());
-    let eye_rays = make_eye_rays(&scene.camera_position, &scene.camera_orientation,
+    let eye_rays = make_eye_rays(&camera.position, &camera.orientation,
                                  width, height, y_bounds, subpix);
 
     assert!(eye_rays.len() == photon_buffer.len());
@@ -295,7 +295,7 @@ fn hdr_postprocess_blit(renderer: &mut sdl2::render::Renderer, photon_buffer: &[
     });
 }
 
-fn parallel_path_trace_scene(config: &RenderConfig, scene: &Scene, width: u32, height: u32,
+fn parallel_path_trace_scene(config: &RenderConfig, camera: &Camera, scene: &Scene, width: u32, height: u32,
                              photon_buffer: &mut[Color3f]) {
     let chunks: Vec<_> = photon_buffer.chunks_mut((width * height) as usize / config.threads).collect();
 
@@ -304,6 +304,7 @@ fn parallel_path_trace_scene(config: &RenderConfig, scene: &Scene, width: u32, h
             scope.spawn(move || {
                 let mut rng = rand::thread_rng();
                 path_trace_scene(config,
+                                 camera,
                                  scene,
                                  width as i32,
                                  height as i32,
@@ -395,7 +396,7 @@ fn save_photon_buffer(stat_samples: u32, img_size: (u32, u32), photon_buffer: &V
     dump_hdr_postprocessed_image(&file_prefix, img_size, max_value_of_photon_buffer(&photon_buffer), &photon_buffer)
 }
 
-pub fn render_loop(iterations: i32, config: &RenderConfig, scene: &Scene) -> Vec<Color3f>
+pub fn render_scene(iterations: i32, config: &RenderConfig, camera: &Camera, scene: &Scene) -> Vec<Color3f>
 {
     println!("Keys: <esc> to quit, <s> to dump raw image");
 
@@ -413,11 +414,11 @@ pub fn render_loop(iterations: i32, config: &RenderConfig, scene: &Scene) -> Vec
     let mut event_pump = sdl_context.event_pump().unwrap();
     let mut photon_buffer = vec![Color3f::default(); (output_size.0 * output_size.1) as usize];
 
-    'running: for i in 0..iterations {
+    for i in 0..iterations {
         for event in event_pump.poll_iter() {
             match event {
                 Event::Quit {..} | Event::KeyDown { keycode: Some(Keycode::Escape), .. } => {
-                    break 'running
+                    std::process::exit(1);
                 },
                 Event::KeyDown { keycode: Some(Keycode::S), .. } => {
                     save_photon_buffer(stats_samples_per_pixel, output_size, &photon_buffer);
@@ -428,7 +429,7 @@ pub fn render_loop(iterations: i32, config: &RenderConfig, scene: &Scene) -> Vec
 
         let t = time::precise_time_ns();
 
-        parallel_path_trace_scene(config, &scene, output_size.0, output_size.1, &mut photon_buffer);
+        parallel_path_trace_scene(config, &camera, &scene, output_size.0, output_size.1, &mut photon_buffer);
         hdr_postprocess_blit(&mut renderer, &photon_buffer);
 
         let t_ = time::precise_time_ns();

@@ -1,11 +1,11 @@
 extern crate rand;
 extern crate rustyballs;
 use rand::Rng; // why did i need this for rng.gen?
-use rustyballs::render_loop;
+use rustyballs::render_scene;
 use rustyballs::vec3::Vec3;
 use rustyballs::color3f::Color3f;
 use rustyballs::quaternion::Quaternion;
-use rustyballs::raytracer::{random_vector_in_hemisphere,random_normal,VacuumAction,IsectFrom,Ray,RayIsect,RenderConfig,SceneObj,Primitive,
+use rustyballs::raytracer::{Camera,random_vector_in_hemisphere,random_normal,VacuumAction,IsectFrom,Ray,RayIsect,RenderConfig,SceneObj,Primitive,
 Scene,Material,EPSILON};
 
 const planet_pos: Vec3 = Vec3{x:0., y: 0., z: -4.};
@@ -63,8 +63,6 @@ fn planet_pp(isect: &RayIsect, rng: &mut rand::ThreadRng) -> Option<Ray> {
 }
 fn main() {
     let mut scene: Scene = Scene{
-        camera_position: Vec3{x:0., y:0., z:0.},
-        camera_orientation: Quaternion::default(),
         objs: Vec::new(),
         vacuum_program: Some(vacuum_program)
     };
@@ -85,5 +83,10 @@ fn main() {
         },
     ];
 
-    render_loop(4, &RenderConfig { threads:8, samples_per_first_isect: 1000, image_size: (512, 512) }, &scene);
+    render_scene(
+        4,
+        &RenderConfig { threads:8, samples_per_first_isect: 1000, image_size: (512, 512) },
+        &Camera { position: Vec3{x:0., y:0., z:0.}, orientation: Quaternion::default() },
+        &scene
+    );
 }

@@ -87,10 +87,14 @@ impl Default for Material {
 }
 
 pub struct Scene<'a> {
-    pub camera_position: Vec3,
-    pub camera_orientation: Quaternion,
     pub objs: Vec<SceneObj>,
     pub vacuum_program: Option<VacuumProgram<'a>>
+}
+
+#[derive(Copy,Clone)]
+pub struct Camera {
+    pub position: Vec3,
+    pub orientation: Quaternion
 }
 
 #[derive(Clone,Default)]

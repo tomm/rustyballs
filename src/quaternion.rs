@@ -3,7 +3,7 @@ use std::ops::{Mul};
 
 use vec3::Vec3;
 
-#[derive(PartialEq)]
+#[derive(PartialEq, Clone, Copy)]
 pub struct Quaternion {
     pub a: f32,
     pub b: f32,
