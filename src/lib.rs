@@ -316,27 +316,34 @@ fn parallel_path_trace_scene(config: &RenderConfig, scene: &Scene, width: u32, h
     });
 }
 
-fn normalize_photon_buffer(photon_buffer: &Vec<Color3f>) -> (Vec<Color3f>, f32) {
-    let mut buf = photon_buffer.clone();
-
-    // normalize colour values to [0..1]
+pub fn max_value_of_photon_buffer(photon_buffer: &Vec<Color3f>) -> f32 {
     let mut max_value: f32 = 0.;
-    for c in buf.iter() {
+    for c in photon_buffer.iter() {
         if c.max_channel() > max_value {
             max_value = c.max_channel()
         }
     }
+    max_value
+}
+
+fn normalize_photon_buffer(photon_buffer: &Vec<Color3f>) -> (Vec<Color3f>, f32) {
+    let mut buf = photon_buffer.clone();
+
+    let max_value = max_value_of_photon_buffer(photon_buffer);
+
+    // normalize colour values to [0..1]
     for c in buf.iter_mut() {
         *c = Color3f {r: c.r / max_value, g: c.g / max_value, b: c.b / max_value};
     }
     (buf, max_value)
 }
 
-pub fn dump_image(file_prefix: &str, img_size: (u32, u32), photon_buffer: &Vec<Color3f>) {
-    let (buf, max_value) = normalize_photon_buffer(photon_buffer);
+pub fn dump_hdr_postprocessed_image(file_prefix: &str, img_size: (u32, u32), max_value: f32, photon_buffer: &Vec<Color3f>) {
+    //let (buf, max_value) = normalize_photon_buffer(photon_buffer);
 
     let t = time::precise_time_ns();
 
+    /*
     {
         // write raw float data
         let filename = format!("{}.raw", file_prefix);
@@ -356,6 +363,7 @@ pub fn dump_image(file_prefix: &str, img_size: (u32, u32), photon_buffer: &Vec<C
         f.write_all(us);
         f.sync_data();
     }
+    */
 
     {
         let filename = format!("{}.ppm", file_prefix);
@@ -384,12 +392,11 @@ pub fn dump_image(file_prefix: &str, img_size: (u32, u32), photon_buffer: &Vec<C
 fn save_photon_buffer(stat_samples: u32, img_size: (u32, u32), photon_buffer: &Vec<Color3f>) {
     let t = time::precise_time_ns();
     let file_prefix = format!("img_{}_{}_samples", t, stat_samples);
-    dump_image(&file_prefix, img_size, photon_buffer)
+    dump_hdr_postprocessed_image(&file_prefix, img_size, max_value_of_photon_buffer(&photon_buffer), &photon_buffer)
 }
 
-pub fn render_loop<F>(iterations: i32, config: &RenderConfig, mut scene: &mut Scene, mut pre_draw_callback: F) -> Vec<Color3f>
-    where F: FnMut(&mut Scene, &mut Vec<Color3f>) {
-
+pub fn render_loop(iterations: i32, config: &RenderConfig, scene: &Scene) -> Vec<Color3f>
+{
     println!("Keys: <esc> to quit, <s> to dump raw image");
 
     let sdl_context = sdl2::init().unwrap();
@@ -418,8 +425,6 @@ pub fn render_loop<F>(iterations: i32, config: &RenderConfig, mut scene: &mut Sc
                 _ => {}
             }
         }
-
-        pre_draw_callback(&mut scene, &mut photon_buffer);
 
         let t = time::precise_time_ns();
 

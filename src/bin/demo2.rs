@@ -85,7 +85,5 @@ fn main() {
         },
     ];
 
-    render_loop(4, &RenderConfig { threads:8, samples_per_first_isect: 1000, image_size: (512, 512) },
-                &mut scene, |scene, photon_buffer| {
-    });
+    render_loop(4, &RenderConfig { threads:8, samples_per_first_isect: 1000, image_size: (512, 512) }, &scene);
 }
