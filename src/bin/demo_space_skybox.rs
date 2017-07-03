@@ -16,8 +16,9 @@ use rustyballs::shaders::{mirror_pp,random_vector_in_hemisphere,random_normal,di
 use rustyballs::raytracer::{ColorProgramResult,VacuumAction,IsectFrom,Ray,RayIsect,RenderConfig,SceneObj,Primitive,
 Scene,Camera,Material,EPSILON};
 
-static ITERS: i32 = 50;
-static RESOLUTION: (u32, u32) = (1024, 1024);
+static HDR_GAMMA: f32 = 1000.0;
+static ITERS: i32 = 40;
+static RESOLUTION: (u32, u32) = (512, 512);
 
 lazy_static! {
     static ref perlin: noise::Perlin = noise::Perlin::new();
@@ -275,7 +276,10 @@ fn main() {
         },
     ];
 
-    let render_config = RenderConfig { threads:8, samples_per_first_isect: 20, image_size: RESOLUTION};
+    let render_config = RenderConfig {
+        threads:8, samples_per_first_isect: 20, image_size: RESOLUTION,
+        preview_hdr_gamma: HDR_GAMMA
+    };
 
     let camera = Camera {
         position: Vec3{x:0., y:0., z:0.},
@@ -312,10 +316,10 @@ fn render_skybox(file_prefix: &str, iterations: i32, render_config: &RenderConfi
         )
     );
 
-    dump_hdr_postprocessed_image(&format!("{}_fr", file_prefix), render_config.image_size, max_value, &img_fr);
-    dump_hdr_postprocessed_image(&format!("{}_bk", file_prefix), render_config.image_size, max_value, &img_bk);
-    dump_hdr_postprocessed_image(&format!("{}_up", file_prefix), render_config.image_size, max_value, &img_up);
-    dump_hdr_postprocessed_image(&format!("{}_dn", file_prefix), render_config.image_size, max_value, &img_dn);
-    dump_hdr_postprocessed_image(&format!("{}_lf", file_prefix), render_config.image_size, max_value, &img_lf);
-    dump_hdr_postprocessed_image(&format!("{}_rt", file_prefix), render_config.image_size, max_value, &img_rt);
+    dump_hdr_postprocessed_image(&format!("{}_fr", file_prefix), render_config.image_size, render_config.preview_hdr_gamma, max_value, &img_fr);
+    dump_hdr_postprocessed_image(&format!("{}_bk", file_prefix), render_config.image_size, render_config.preview_hdr_gamma, max_value, &img_bk);
+    dump_hdr_postprocessed_image(&format!("{}_up", file_prefix), render_config.image_size, render_config.preview_hdr_gamma, max_value, &img_up);
+    dump_hdr_postprocessed_image(&format!("{}_dn", file_prefix), render_config.image_size, render_config.preview_hdr_gamma, max_value, &img_dn);
+    dump_hdr_postprocessed_image(&format!("{}_lf", file_prefix), render_config.image_size, render_config.preview_hdr_gamma, max_value, &img_lf);
+    dump_hdr_postprocessed_image(&format!("{}_rt", file_prefix), render_config.image_size, render_config.preview_hdr_gamma, max_value, &img_rt);
 }

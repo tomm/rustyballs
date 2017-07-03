@@ -17,14 +17,16 @@ pub struct Ray {
 pub struct RenderConfig {
     pub threads: usize,
     pub samples_per_first_isect: u32,
-    pub image_size: (u32, u32)
+    pub image_size: (u32, u32),
+    pub preview_hdr_gamma: f32
 }
 impl Default for RenderConfig {
     fn default() -> RenderConfig {
         RenderConfig{
             threads: 8,
             samples_per_first_isect: 20,
-            image_size: (512, 512)
+            image_size: (512, 512),
+            preview_hdr_gamma: 100.0
         }
     }
 }

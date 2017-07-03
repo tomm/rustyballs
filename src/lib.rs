@@ -271,20 +271,23 @@ fn render_pixels<F>(renderer: &mut sdl2::render::Renderer, photon_buffer: &[Colo
     }
 }
 
-fn hdr_postprocess_blit(renderer: &mut sdl2::render::Renderer, photon_buffer: &[Color3f]) {
-    let mut max_color = 0.;
-
-    for col in photon_buffer.iter() {
-        if col.r > max_color { max_color = col.r; }
-        if col.g > max_color { max_color = col.g; }
-        if col.b > max_color { max_color = col.b; }
-    }
-
-    let brightness = 255. / (1.+max_color).ln();
+fn hdr_postprocess_blit(hdr_gamma: f32, renderer: &mut sdl2::render::Renderer, photon_buffer: &Vec<Color3f>) {
+    let max_value = max_value_of_photon_buffer(photon_buffer);
 
     render_pixels(renderer, photon_buffer, |c: &Color3f| {
-        Color3f {r: (c.r+1.).ln(), g: (c.g+1.).ln(), b: (c.b+1.).ln()}.smul(brightness)
+        hdr_log_tonemap(max_value, hdr_gamma, &c)
     });
+}
+
+/* Tone map a color (in a scene containing a maximum colour value of 'max_value') to range [0..255] */
+fn hdr_log_tonemap(max_value: f32, gamma: f32, c: &Color3f) -> Color3f
+{
+    let scale = 255.0 / (1. + gamma).ln();
+    Color3f {
+        r: scale * (1.+c.r*gamma/max_value).ln(),
+        g: scale * (1.+c.g*gamma/max_value).ln(),
+        b: scale * (1.+c.b*gamma/max_value).ln()
+    }
 }
 
 fn parallel_path_trace_scene(config: &RenderConfig, camera: &Camera, scene: &Scene, width: u32, height: u32,
@@ -331,7 +334,7 @@ fn normalize_photon_buffer(photon_buffer: &Vec<Color3f>) -> (Vec<Color3f>, f32) 
     (buf, max_value)
 }
 
-pub fn dump_hdr_postprocessed_image(file_prefix: &str, img_size: (u32, u32), max_value: f32, photon_buffer: &Vec<Color3f>) {
+pub fn dump_hdr_postprocessed_image(file_prefix: &str, img_size: (u32, u32), gamma: f32, max_value: f32, photon_buffer: &Vec<Color3f>) {
     //let (buf, max_value) = normalize_photon_buffer(photon_buffer);
 
     let t = time::precise_time_ns();
@@ -370,22 +373,22 @@ pub fn dump_hdr_postprocessed_image(file_prefix: &str, img_size: (u32, u32), max
         f.write_all(format!("P6 {} {} 255\n", img_size.0, img_size.1).as_bytes());
 
         // write log mapped u8 data (as displayed)
-        let brightness = 255. / (1.+max_value).ln();
         let mut rgb: Vec<u8> = Vec::new();
         for c in photon_buffer.iter() {
-            rgb.push(((c.r+1.).ln() * brightness) as u8);
-            rgb.push(((c.g+1.).ln() * brightness) as u8);
-            rgb.push(((c.b+1.).ln() * brightness) as u8);
+            let tonemapped = hdr_log_tonemap(max_value, gamma, c);
+            rgb.push(tonemapped.r as u8);
+            rgb.push(tonemapped.g as u8);
+            rgb.push(tonemapped.b as u8);
         }
         f.write_all(&rgb);
         f.sync_data();
     }
 }
 
-fn save_photon_buffer(stat_samples: u32, img_size: (u32, u32), photon_buffer: &Vec<Color3f>) {
+fn save_photon_buffer(hdr_gamma: f32, stat_samples: u32, img_size: (u32, u32), photon_buffer: &Vec<Color3f>) {
     let t = time::precise_time_ns();
     let file_prefix = format!("img_{}_{}_samples", t, stat_samples);
-    dump_hdr_postprocessed_image(&file_prefix, img_size, max_value_of_photon_buffer(&photon_buffer), &photon_buffer)
+    dump_hdr_postprocessed_image(&file_prefix, img_size, hdr_gamma, max_value_of_photon_buffer(&photon_buffer), &photon_buffer)
 }
 
 pub fn render_scene(iterations: i32, config: &RenderConfig, camera: &Camera, scene: &Scene) -> Vec<Color3f>
@@ -413,7 +416,7 @@ pub fn render_scene(iterations: i32, config: &RenderConfig, camera: &Camera, sce
                     std::process::exit(1);
                 },
                 Event::KeyDown { keycode: Some(Keycode::S), .. } => {
-                    save_photon_buffer(stats_samples_per_pixel, output_size, &photon_buffer);
+                    save_photon_buffer(config.preview_hdr_gamma, stats_samples_per_pixel, output_size, &photon_buffer);
                 }
                 _ => {}
             }
@@ -422,7 +425,7 @@ pub fn render_scene(iterations: i32, config: &RenderConfig, camera: &Camera, sce
         let t = time::precise_time_ns();
 
         parallel_path_trace_scene(config, &camera, &scene, output_size.0, output_size.1, &mut photon_buffer);
-        hdr_postprocess_blit(&mut renderer, &photon_buffer);
+        hdr_postprocess_blit(config.preview_hdr_gamma, &mut renderer, &photon_buffer);
 
         let t_ = time::precise_time_ns();
         stats_samples_per_pixel += config.samples_per_first_isect;
