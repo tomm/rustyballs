@@ -12,10 +12,11 @@ use rustyballs::max_value_of_photon_buffer;
 use rustyballs::vec3::Vec3;
 use rustyballs::color3f::Color3f;
 use rustyballs::quaternion::Quaternion;
-use rustyballs::raytracer::{random_vector_in_hemisphere,random_normal,VacuumAction,IsectFrom,Ray,RayIsect,RenderConfig,SceneObj,Primitive,
+use rustyballs::shaders::{mirror_pp,random_vector_in_hemisphere,random_normal,diffuse_pp,end_pp};
+use rustyballs::raytracer::{VacuumAction,IsectFrom,Ray,RayIsect,RenderConfig,SceneObj,Primitive,
 Scene,Camera,Material,EPSILON};
 
-static ITERS: i32 = 500;
+static ITERS: i32 = 50;
 static RESOLUTION: (u32, u32) = (1024, 1024);
 
 lazy_static! {
@@ -45,6 +46,23 @@ fn octavenoise(octaves: i32, persistence: f32, lacunarity: f32, p: &Vec3) -> f32
 		jizm *= lacunarity;
 	}
 	(0.5 + n*0.5)
+}
+
+fn ice_planet_pp(isect: &RayIsect, rng: &mut rand::ThreadRng) -> Option<Ray> {
+    let p = isect.hit_pos().smul(5000.0);
+    let die = rng.gen::<f32>();
+    if die < 0.25 {
+        let isect_normal = (isect.normal() +
+                            Vec3{x: f32::powi(perlin1d(p.x), 3),
+                                 y: f32::powi(perlin1d(10.0+p.y), 3),
+                                 z: f32::powi(perlin1d(20.0+p.z), 3)
+                            }.smul(0.01)).normal();
+        let isect_pos = isect.hit_pos();
+        let reflect = isect.ray.dir - (isect_normal.smul(isect.ray.dir.dot(&isect_normal))).smul(2.);
+        Some(Ray{origin: isect_pos + isect_normal.smul(EPSILON), dir: reflect.normal()})
+    } else {
+        diffuse_pp(isect, rng)
+    }
 }
 
 // _pp = PathProgram
@@ -100,20 +118,10 @@ fn glass_pp(isect: &RayIsect, rng: &mut rand::ThreadRng) -> Option<Ray> {
                  dir: refract_dir})
     }
 }
-fn null_pp(isect: &RayIsect, rng: &mut rand::ThreadRng) -> Option<Ray> {
-    None
-}
 fn fog_scatter_pp(isect: &RayIsect, rng: &mut rand::ThreadRng) -> Option<Ray> {
     Some(Ray{
         origin: isect.hit_pos(),
         dir: (isect.ray.dir.smul(10. * rng.gen::<f32>()) + random_vector_in_hemisphere(&isect.ray.dir, rng)).normal()
-    })
-}
-fn diffuse_pp(isect: &RayIsect, rng: &mut rand::ThreadRng) -> Option<Ray> {
-    let norm = isect.normal();
-    Some(Ray{
-        origin: isect.hit_pos() + norm.smul(EPSILON),
-        dir: random_vector_in_hemisphere(&isect.normal(), rng)
     })
 }
 
@@ -135,7 +143,7 @@ fn gas_giant_ring_pp(isect: &RayIsect, rng: &mut rand::ThreadRng) -> Option<Ray>
                 diffuse_pp(isect, rng)
             } else {
                 // missed rings. continue on
-                Some(Ray{origin: isect.hit_pos() + normal.smul(EPSILON), dir: isect.ray.dir})
+                Some(Ray{origin: isect.hit_pos() - normal.smul(EPSILON), dir: isect.ray.dir})
             }
         }
         _ => unreachable!()
@@ -173,13 +181,13 @@ fn gas_giant_cp(isect: &RayIsect) -> (Color3f, Color3f) {
         _ => unreachable!()
     }
 }
-fn moon_cp(isect: &RayIsect) -> (Color3f, Color3f) {
+fn ice_planet_cp(isect: &RayIsect) -> (Color3f, Color3f) {
     match isect.scene_obj.prim {
         Primitive::Sphere(pos, radius) => {
             let p = (isect.hit_pos() - pos).normal();
             let n = octavenoise(12, 0.5, 2.0, &p.smul(100.0));
             (
-                Color3f{r:0.50,g:0.50,b:0.50}.smul(1.0-n)+Color3f{r:1.0,g:1.0,b:1.0}.smul(n),
+                Color3f{r:0.6,g:0.6,b:0.8}.smul(1.0-n)+Color3f{r:0.9,g:0.9,b:1.0}.smul(n),
                 Color3f::default() ,
             )
         }
@@ -189,7 +197,28 @@ fn moon_cp(isect: &RayIsect) -> (Color3f, Color3f) {
 
 // _cp = ColorProgram
 // returning (transmissive, emissive) colours
-fn white_wall_cp(_: &RayIsect) -> (Color3f, Color3f) { (Color3f{r:1., g:1., b:1.}, Color3f::default()) }
+//
+fn bg_stars_cp(isect: &RayIsect) -> (Color3f, Color3f) {
+    let p = isect.hit_pos();
+    let k = perlin3d(&(p+Vec3{x:0.,y:0.,z:200.0}));
+    let f = perlin3d(&p);
+    let b = perlin3d(&(p+Vec3{x:0.,y:367.0,z:0.0}));
+    let dim = perlin3d(&p.smul(8.0));
+    (
+        Color3f::default(),
+        if k > 0.99 {
+            Color3f{r:1., g:0.8, b:0.2}
+        } else if f > 0.99 {
+            Color3f{r:1., g:1., b:1.}
+        } else if b > 0.99 {
+            Color3f{r:0.5, g:0.5, b:1.0}
+        } else if dim > 0.995 {
+            Color3f{r:1., g:1., b:1.}
+        } else {
+            Color3f{r:0., g:0., b:0.}
+        }
+    )
+}
 fn left_wall_cp(_: &RayIsect) -> (Color3f, Color3f) { (Color3f{r:1., g:0., b:0.}, Color3f::default()) }
 fn right_wall_cp(_: &RayIsect) -> (Color3f, Color3f) { (Color3f{r:0., g:0., b:1.}, Color3f::default()) }
 fn red_ball_cp(_: &RayIsect) -> (Color3f, Color3f) { (Color3f{r:1., g:0.5, b:0.5}, Color3f::default()) }
@@ -204,7 +233,8 @@ fn check_floor_cp(isect: &RayIsect) -> (Color3f, Color3f) {
         (Color3f{r:0.5, g:0.5, b:0.5}, Color3f::default())
     }
 }
-fn red_star_cp(_: &RayIsect) -> (Color3f, Color3f) { (Color3f{r:1., g:0.3, b:0.1}, Color3f{r:1., g:0.3, b:0.1}) }
+fn red_star_cp(_: &RayIsect) -> (Color3f, Color3f) { (Color3f::default(), Color3f{r:1., g:0.2, b:0.0}) }
+fn yellow_star_cp(_: &RayIsect) -> (Color3f, Color3f) { (Color3f::default(), Color3f{r:1., g:0.8, b:0.5}) }
 
 fn fog_cp(_: &RayIsect) -> (Color3f, Color3f) { (Color3f{r:1., g:1., b:1.}, Color3f::black()) }
 static scatterDummyObj: SceneObj = SceneObj {
@@ -253,17 +283,17 @@ fn main() {
     scene.objs = vec![
         // star to right of camera
         SceneObj {
-            prim: Primitive::Sphere(Vec3 {x: 10., y:-0.8, z: -0.3}, 1.),
-            mat: Material { color_program: red_star_cp, path_program: diffuse_pp /* end paths here */ }
+            prim: Primitive::Sphere(Vec3 {x: 10., y:-0.8, z: -0.3}, 0.9),
+            mat: Material { color_program: red_star_cp, path_program: end_pp /* end paths here */ }
         },
         SceneObj {
-            prim: Primitive::Sphere(Vec3 {x: 10., y:1.3, z: 1.1}, 1.),
-            mat: Material { color_program: red_star_cp, path_program: diffuse_pp /* end paths here */ }
+            prim: Primitive::Sphere(Vec3 {x: 10., y:1.3, z: 1.1}, 1.1),
+            mat: Material { color_program: yellow_star_cp, path_program: end_pp /* end paths here */ }
         },
         // moon below camera
         SceneObj {
             prim: Primitive::Sphere(Vec3 {x: 0., y:-0.1, z: 0.}, 0.0995),
-            mat: Material { color_program: moon_cp, path_program: diffuse_pp }
+            mat: Material { color_program: ice_planet_cp, path_program: ice_planet_pp }
         },
         // gas giant in above & front of camera
         SceneObj {
@@ -275,16 +305,14 @@ fn main() {
             prim: Primitive:: Plane(Vec3 {x: 0., y:1., z: -1.}, Vec3{x:0.5, y:0., z:1.0}.normal()),
             mat: Material { color_program: gas_giant_ring_cp, path_program: gas_giant_ring_pp }
         },
-    /*
-        // floor
+        // background star sphere
         SceneObj {
-            prim: Primitive::Plane(Vec3 {x:0., y:0., z:0.}, Vec3{x:0.,y:1., z:0.}),
-            mat: Material { color_program: check_floor_cp, path_program: semi_mirror_pp }
+            prim: Primitive::Sphere(Vec3 {x: 0., y:0., z: 0.}, 100.0),
+            mat: Material { color_program: bg_stars_cp, path_program: end_pp }
         },
-        */
     ];
 
-    let render_config = RenderConfig { threads:8, samples_per_first_isect: 19, image_size: RESOLUTION};
+    let render_config = RenderConfig { threads:8, samples_per_first_isect: 20, image_size: RESOLUTION};
 
     let camera = Camera {
         position: Vec3{x:0., y:0., z:0.},

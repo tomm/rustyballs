@@ -5,21 +5,17 @@ use rustyballs::render_scene;
 use rustyballs::vec3::Vec3;
 use rustyballs::color3f::Color3f;
 use rustyballs::quaternion::Quaternion;
-use rustyballs::raytracer::{Camera,random_vector_in_hemisphere,random_normal,VacuumAction,IsectFrom,Ray,RayIsect,RenderConfig,SceneObj,Primitive,
+use rustyballs::shaders::{mirror_pp,diffuse_pp,random_normal,random_vector_in_hemisphere};
+use rustyballs::raytracer::{Camera,VacuumAction,IsectFrom,Ray,RayIsect,RenderConfig,SceneObj,Primitive,
 Scene,Material,EPSILON};
 
 // _pp = PathProgram
 fn semi_mirror_pp(isect: &RayIsect, rng: &mut rand::ThreadRng) -> Option<Ray> {
     let die = rng.gen::<f32>();
     if die < 0.5 {
-        let isect_normal = isect.normal();
-        let isect_pos = isect.hit_pos();
-            let reflect = isect.ray.dir - (isect_normal.smul(isect.ray.dir.dot(&isect_normal))).smul(2.);
-            Some(Ray{origin: isect_pos + isect_normal.smul(EPSILON),
-                     dir: reflect.normal()})
+        mirror_pp(isect, rng)
     } else {
-        // transmissive
-        Some(isect.new_random_ray(rng))
+        diffuse_pp(isect, rng)
     }
 }
 
@@ -68,13 +64,6 @@ fn fog_scatter_pp(isect: &RayIsect, rng: &mut rand::ThreadRng) -> Option<Ray> {
     Some(Ray{
         origin: isect.hit_pos(),
         dir: (isect.ray.dir.smul(10. * rng.gen::<f32>()) + random_vector_in_hemisphere(&isect.ray.dir, rng)).normal()
-    })
-}
-fn diffuse_pp(isect: &RayIsect, rng: &mut rand::ThreadRng) -> Option<Ray> {
-    let norm = isect.normal();
-    Some(Ray{
-        origin: isect.hit_pos() + norm.smul(EPSILON),
-        dir: random_vector_in_hemisphere(&isect.normal(), rng)
     })
 }
 

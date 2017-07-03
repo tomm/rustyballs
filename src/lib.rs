@@ -17,6 +17,7 @@ pub mod quaternion;
 pub mod vec3;
 pub mod color3f;
 pub mod raytracer;
+pub mod shaders;
 use quaternion::Quaternion;
 use vec3::Vec3;
 use color3f::Color3f;
@@ -109,28 +110,6 @@ fn find_first_intersection<'a>(ray: &Ray, scene: &'a Vec<SceneObj>) -> Option<Ra
     nearest
 }
 
-fn flip_vector_to_hemisphere(flipee: &Vec3, norm: &Vec3) -> Vec3 {
-    if flipee.dot(norm) > 0. {
-        *flipee
-    } else {
-        -*flipee
-    }
-}
-
-fn random_vector_in_hemisphere(norm: &Vec3, rng: &mut rand::ThreadRng) -> Vec3 {
-    flip_vector_to_hemisphere(
-        &Vec3 {x: 0.5-rng.gen::<f32>(), y: 0.5-rng.gen::<f32>(), z: 0.5-rng.gen::<f32>()},
-        norm
-    ).normal()
-}
-
-fn new_random_ray_from_isect(isect: &RayIsect, rng: &mut rand::ThreadRng) -> Ray {
-    let last_isect_norm = isect.normal();
-    let ray_start_pos = isect.hit_pos() + last_isect_norm.smul(EPSILON);
-    let rand_dir = random_vector_in_hemisphere(&last_isect_norm, rng);
-    Ray {origin: ray_start_pos, dir: rand_dir}
-}
-
 fn make_ray_scatter_path<'a>(ray: &Ray, scene: &'a Scene, rng: &mut rand::ThreadRng, path: &mut Path<'a>) {
     match find_first_intersection(ray, &scene.objs) {
         Some(isect) => {
@@ -166,10 +145,14 @@ fn collect_light_from_path(path: &Path) -> Color3f {
     let mut color = Color3f::default();
 
     for i in (0..path.num_bounces as usize).rev() {
-        let surface_normal = &path.isects[i].normal();
         let (transmissive, emissive) = (path.isects[i].scene_obj.mat.color_program)(&path.isects[i]);
-        let mut cos_theta;
+        color = emissive + (color * transmissive);
         
+        /*
+        // wrong, since it makes all surfaces have diffuse BDRF
+        let mut cos_theta;
+
+        let surface_normal = &path.isects[i].normal();
         if i < (path.num_bounces-1) as usize {
             cos_theta = match path.isects[i+1].from {
                 IsectFrom::Inside => (-path.isects[i+1].ray.dir).dot(&surface_normal),
@@ -179,8 +162,8 @@ fn collect_light_from_path(path: &Path) -> Color3f {
             cos_theta = 1.;
         }
         if cos_theta < 0. { cos_theta = 0.; }
-
         color = emissive + (color * transmissive).smul(cos_theta);
+        */
     }
 
     color
@@ -204,15 +187,12 @@ fn path_trace_rays(config: &RenderConfig, rays: &Vec<Ray>, scene: &Scene,
         // now reuse the first isect for a few more paths! (great optimisation)
         if path.num_bounces > 0 {
             let first_isect = path.isects[0].clone();
-            for _ in 0..config.samples_per_first_isect {
+            for _ in 0..(config.samples_per_first_isect-1) {
                 path.num_bounces = 1;
-                match (first_isect.scene_obj.mat.path_program)(&first_isect, rng) {
-                    Some(next_ray) => {
-                        make_ray_scatter_path(&next_ray, scene, rng, &mut path);
-                        photon_buffer[i] += collect_light_from_path(&path);
-                    },
-                    None => {}
+                if let Some(next_ray) = (first_isect.scene_obj.mat.path_program)(&first_isect, rng) {
+                    make_ray_scatter_path(&next_ray, scene, rng, &mut path);
                 }
+                photon_buffer[i] += collect_light_from_path(&path);
             }
         }
     }
@@ -433,11 +413,11 @@ pub fn render_scene(iterations: i32, config: &RenderConfig, camera: &Camera, sce
         hdr_postprocess_blit(&mut renderer, &photon_buffer);
 
         let t_ = time::precise_time_ns();
-        stats_samples_per_pixel += 1 + config.samples_per_first_isect;
+        stats_samples_per_pixel += config.samples_per_first_isect;
         println!("{} accumulated samples per pixel. {} ms per frame, {} paths per second.",
                  stats_samples_per_pixel,
                  (t_ - t)/1000000,
-                 ((1000000000u64 * (output_size.0 * output_size.1 * (1u32+config.samples_per_first_isect)) as u64) / (t_ - t))
+                 ((1000000000u64 * (output_size.0 * output_size.1 * (config.samples_per_first_isect)) as u64) / (t_ - t))
         );
         renderer.present();
     }

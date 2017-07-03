@@ -4,6 +4,7 @@ use std::default::Default;
 use vec3::Vec3;
 use color3f::Color3f;
 use quaternion::Quaternion;
+use shaders;
 
 pub const EPSILON: f32 = 0.0001;
 
@@ -11,16 +12,6 @@ pub const EPSILON: f32 = 0.0001;
 pub struct Ray {
     pub origin: Vec3,
     pub dir: Vec3
-}
-
-pub fn random_normal(rng: &mut rand::ThreadRng) -> Vec3 {
-    loop {
-        let v = Vec3 {x: 1.-2.*rng.gen::<f32>(), y: 1.0-2.*rng.gen::<f32>(), z: 1.-2.*rng.gen::<f32>()};
-        let len_sqr = v.x*v.x + v.y*v.y + v.z*v.z;
-        if len_sqr <= 1. {
-            return v.smul(1./len_sqr.sqrt());
-        }
-    }
 }
 
 pub struct RenderConfig {
@@ -129,24 +120,9 @@ impl<'a> RayIsect<'a> {
     pub fn new_random_ray(&self, rng: &mut rand::ThreadRng) -> Ray {
         let last_isect_norm = self.normal();
         let ray_start_pos = self.hit_pos() + last_isect_norm.smul(EPSILON);
-        let rand_dir = random_vector_in_hemisphere(&last_isect_norm, rng);
+        let rand_dir = shaders::random_vector_in_hemisphere(&last_isect_norm, rng);
         Ray {origin: ray_start_pos, dir: rand_dir}
     }
-}
-
-fn flip_vector_to_hemisphere(flipee: &Vec3, norm: &Vec3) -> Vec3 {
-    if flipee.dot(norm) > 0. {
-        *flipee
-    } else {
-        -*flipee
-    }
-}
-
-pub fn random_vector_in_hemisphere(norm: &Vec3, rng: &mut rand::ThreadRng) -> Vec3 {
-    flip_vector_to_hemisphere(
-        &random_normal(rng),
-        norm
-    )
 }
 
 pub const MAX_BOUNCES: usize = 6;

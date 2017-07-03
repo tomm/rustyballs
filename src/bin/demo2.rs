@@ -5,8 +5,8 @@ use rustyballs::render_scene;
 use rustyballs::vec3::Vec3;
 use rustyballs::color3f::Color3f;
 use rustyballs::quaternion::Quaternion;
-use rustyballs::raytracer::{Camera,random_vector_in_hemisphere,random_normal,VacuumAction,IsectFrom,Ray,RayIsect,RenderConfig,SceneObj,Primitive,
-Scene,Material,EPSILON};
+use rustyballs::shaders::{random_vector_in_hemisphere,random_normal};
+use rustyballs::raytracer::{Camera,VacuumAction,IsectFrom,Ray,RayIsect,RenderConfig,SceneObj,Primitive,Scene,Material,EPSILON};
 
 const planet_pos: Vec3 = Vec3{x:0., y: 0., z: -4.};
 
@@ -84,7 +84,7 @@ fn main() {
     ];
 
     render_scene(
-        4,
+        1000000,
         &RenderConfig { threads:8, samples_per_first_isect: 1000, image_size: (512, 512) },
         &Camera { position: Vec3{x:0., y:0., z:0.}, orientation: Quaternion::default() },
         &scene
