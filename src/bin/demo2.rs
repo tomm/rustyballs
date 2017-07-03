@@ -6,7 +6,7 @@ use rustyballs::vec3::Vec3;
 use rustyballs::color3f::Color3f;
 use rustyballs::quaternion::Quaternion;
 use rustyballs::shaders::{random_vector_in_hemisphere,random_normal};
-use rustyballs::raytracer::{Camera,VacuumAction,IsectFrom,Ray,RayIsect,RenderConfig,SceneObj,Primitive,Scene,Material,EPSILON};
+use rustyballs::raytracer::{ColorProgramResult,Camera,VacuumAction,IsectFrom,Ray,RayIsect,RenderConfig,SceneObj,Primitive,Scene,Material,EPSILON};
 
 const planet_pos: Vec3 = Vec3{x:0., y: 0., z: -4.};
 
@@ -16,7 +16,11 @@ fn atmosphere_scatter_pp(isect: &RayIsect, rng: &mut rand::ThreadRng) -> Option<
         dir: random_normal(rng) //(isect.ray.dir.smul(10. * rng.gen::<f32>()) + random_vector_in_hemisphere(&isect.ray.dir, rng)).normal()
     })
 }
-fn atmosphere_cp(_: &RayIsect) -> (Color3f, Color3f) { (Color3f{r:0.5, g:0.5, b:1.}, Color3f::black()) }
+fn atmosphere_cp(_: &RayIsect) -> ColorProgramResult {
+    ColorProgramResult {
+        transmissive: Color3f{r:0.5, g:0.5, b:1.}, emissive: Color3f::black()
+    }
+}
 static scatterDummyObj: SceneObj = SceneObj {
     prim: Primitive::ScatterEvent,
     mat: Material { color_program: atmosphere_cp, path_program: atmosphere_scatter_pp }
@@ -51,13 +55,28 @@ fn vacuum_program<'a>(isect: &RayIsect, rng: &mut rand::ThreadRng) -> VacuumActi
     VacuumAction::Continue
 }
 
-fn black_cp(_: &RayIsect) -> (Color3f, Color3f) { (Color3f::black(), Color3f::black()) }
+fn black_cp(_: &RayIsect) -> ColorProgramResult {
+    ColorProgramResult {
+        transmissive: Color3f::black(),
+        emissive: Color3f::black()
+    }
+}
 fn black_pp(isect: &RayIsect, rng: &mut rand::ThreadRng) -> Option<Ray> { None }
-fn star_cp(_: &RayIsect) -> (Color3f, Color3f) { (Color3f{r:1., g:1., b:0.8}, Color3f{r:1., g:1., b:0.8}) }
+fn star_cp(_: &RayIsect) -> ColorProgramResult {
+    ColorProgramResult {
+        transmissive: Color3f{r:1., g:1., b:0.8},
+        emissive: Color3f{r:1., g:1., b:0.8}
+    }
+}
 fn star_pp(isect: &RayIsect, rng: &mut rand::ThreadRng) -> Option<Ray> {
     Some(isect.new_random_ray(rng))
 }
-fn planet_cp(_: &RayIsect) -> (Color3f, Color3f) { (Color3f{r:1., g:1., b:1.}, Color3f::default()) }
+fn planet_cp(_: &RayIsect) -> ColorProgramResult {
+    ColorProgramResult {
+        transmissive: Color3f{r:1., g:1., b:1.},
+        emissive: Color3f::default()
+    }
+}
 fn planet_pp(isect: &RayIsect, rng: &mut rand::ThreadRng) -> Option<Ray> {
     Some(isect.new_random_ray(rng))
 }

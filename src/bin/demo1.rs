@@ -6,7 +6,7 @@ use rustyballs::vec3::Vec3;
 use rustyballs::color3f::Color3f;
 use rustyballs::quaternion::Quaternion;
 use rustyballs::shaders::{mirror_pp,diffuse_pp,random_normal,random_vector_in_hemisphere};
-use rustyballs::raytracer::{Camera,VacuumAction,IsectFrom,Ray,RayIsect,RenderConfig,SceneObj,Primitive,
+use rustyballs::raytracer::{ColorProgramResult,Camera,VacuumAction,IsectFrom,Ray,RayIsect,RenderConfig,SceneObj,Primitive,
 Scene,Material,EPSILON};
 
 // _pp = PathProgram
@@ -69,23 +69,31 @@ fn fog_scatter_pp(isect: &RayIsect, rng: &mut rand::ThreadRng) -> Option<Ray> {
 
 // _cp = ColorProgram
 // returning (transmissive, emissive) colours
-fn white_wall_cp(_: &RayIsect) -> (Color3f, Color3f) { (Color3f{r:1., g:1., b:1.}, Color3f::default()) }
-fn left_wall_cp(_: &RayIsect) -> (Color3f, Color3f) { (Color3f{r:1., g:0., b:0.}, Color3f::default()) }
-fn right_wall_cp(_: &RayIsect) -> (Color3f, Color3f) { (Color3f{r:0., g:0., b:1.}, Color3f::default()) }
-fn red_ball_cp(_: &RayIsect) -> (Color3f, Color3f) { (Color3f{r:1., g:0.5, b:0.5}, Color3f::default()) }
-fn green_ball_cp(_: &RayIsect) -> (Color3f, Color3f) { (Color3f{r:0.5, g:1., b:0.5}, Color3f::default()) }
-fn blue_ball_cp(_: &RayIsect) -> (Color3f, Color3f) { (Color3f{r:0.5, g:0.5, b:1.}, Color3f::default()) }
-fn bright_white_light_cp(_: &RayIsect) -> (Color3f, Color3f) { (Color3f{r:1., g:1., b:1.}, Color3f{r:1., g:1., b:1.}) }
-fn check_floor_cp(isect: &RayIsect) -> (Color3f, Color3f) {
+fn cp_col(r: f32, g: f32, b: f32) -> ColorProgramResult {
+    ColorProgramResult { transmissive: Color3f {r:r, g:g, b:b}, emissive: Color3f::default() }
+}
+fn white_wall_cp(_: &RayIsect) -> ColorProgramResult { cp_col(1., 1., 1.) }
+fn left_wall_cp(_: &RayIsect) -> ColorProgramResult { cp_col(1., 0., 0.) }
+fn right_wall_cp(_: &RayIsect) -> ColorProgramResult { cp_col(0., 0., 1.) }
+fn red_ball_cp(_: &RayIsect) -> ColorProgramResult { cp_col(1., 0.5, 0.5) }
+fn green_ball_cp(_: &RayIsect) -> ColorProgramResult { cp_col(0.5, 1., 0.5) }
+fn blue_ball_cp(_: &RayIsect) -> ColorProgramResult { cp_col(0.5, 0.5, 1.) }
+fn bright_white_light_cp(_: &RayIsect) -> ColorProgramResult {
+    ColorProgramResult {
+        transmissive: Color3f{r:1., g:1., b:1.},
+        emissive: Color3f{r:1., g:1., b:1.}
+    }
+}
+fn check_floor_cp(isect: &RayIsect) -> ColorProgramResult {
     let pos = isect.hit_pos();
     if ((pos.x.floor() as i32 + pos.z.floor() as i32) & 1) == 0 {
-        (Color3f{r:1., g:1., b:1.}, Color3f::default())
+        cp_col(1., 1., 1.)
     } else {
-        (Color3f{r:0.5, g:0.5, b:0.5}, Color3f::default())
+        cp_col(0.5, 0.5, 0.5)
     }
 }
 
-fn fog_cp(_: &RayIsect) -> (Color3f, Color3f) { (Color3f{r:1., g:1., b:1.}, Color3f::black()) }
+fn fog_cp(_: &RayIsect) -> ColorProgramResult { cp_col(1., 1., 1.) }
 static scatterDummyObj: SceneObj = SceneObj {
     prim: Primitive::ScatterEvent,
     mat: Material { color_program: fog_cp, path_program: fog_scatter_pp }

@@ -141,12 +141,21 @@ fn make_ray_scatter_path<'a>(ray: &Ray, scene: &'a Scene, rng: &mut rand::Thread
     }
 }
 
-fn collect_light_from_path(path: &Path) -> Color3f {
+fn collect_light_from_path(path: &mut Path) -> Color3f {
     let mut color = Color3f::default();
 
     for i in (0..path.num_bounces as usize).rev() {
-        let (transmissive, emissive) = (path.isects[i].scene_obj.mat.color_program)(&path.isects[i]);
-        color = emissive + (color * transmissive);
+        let r = {
+            // use cached first isect color result if it exists
+            if i == 0 && path.first_isect_color.is_some() {
+                path.first_isect_color.unwrap()
+            } else {
+                let r2 = (path.isects[i].scene_obj.mat.color_program)(&path.isects[i]);
+                if i == 0 { path.first_isect_color = Some(r2); }
+                r2
+            }
+        };
+        color = r.emissive + (color * r.transmissive);
         
         /*
         // wrong, since it makes all surfaces have diffuse BDRF
@@ -174,7 +183,8 @@ fn path_trace_rays(config: &RenderConfig, rays: &Vec<Ray>, scene: &Scene,
 
     let mut path = Path {
         num_bounces: 0,
-        isects: [RayIsect{from: IsectFrom::Outside, ray:Ray::default(), dist: 0., scene_obj: &scene.objs[0]}; MAX_BOUNCES]
+        isects: [RayIsect{from: IsectFrom::Outside, ray:Ray::default(), dist: 0., scene_obj: &scene.objs[0]}; MAX_BOUNCES],
+        first_isect_color: None
     };
     // could have initted unsafely (and maybe unwisely) like this also:
     // unsafe { path = std::mem::uninitialized(); }
@@ -182,8 +192,10 @@ fn path_trace_rays(config: &RenderConfig, rays: &Vec<Ray>, scene: &Scene,
     for i in 0..rays.len() {
         // trace first path and collect its light contribution
         path.num_bounces = 0;
+        path.first_isect_color = None;
+
         make_ray_scatter_path(&rays[i], scene, rng, &mut path);
-        photon_buffer[i] += collect_light_from_path(&path);
+        photon_buffer[i] += collect_light_from_path(&mut path);
         // now reuse the first isect for a few more paths! (great optimisation)
         if path.num_bounces > 0 {
             let first_isect = path.isects[0].clone();
@@ -192,7 +204,7 @@ fn path_trace_rays(config: &RenderConfig, rays: &Vec<Ray>, scene: &Scene,
                 if let Some(next_ray) = (first_isect.scene_obj.mat.path_program)(&first_isect, rng) {
                     make_ray_scatter_path(&next_ray, scene, rng, &mut path);
                 }
-                photon_buffer[i] += collect_light_from_path(&path);
+                photon_buffer[i] += collect_light_from_path(&mut path);
             }
         }
     }

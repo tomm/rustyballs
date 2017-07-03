@@ -48,8 +48,14 @@ pub enum VacuumAction<'a> {
     Scatter(RayIsect<'a>)
 }
 
+#[derive(Clone,Copy)]
+pub struct ColorProgramResult {
+    pub transmissive: Color3f,
+    pub emissive: Color3f
+}
+
 pub type PathProgram = fn(&RayIsect, &mut rand::ThreadRng) -> Option<Ray>;
-pub type ColorProgram = fn(&RayIsect) -> (Color3f, Color3f); // (transmissive, emissive)
+pub type ColorProgram = fn(&RayIsect) -> ColorProgramResult;
 pub type VacuumProgram<'a> = fn(&RayIsect, &mut rand::ThreadRng) -> VacuumAction<'a>;
 
 pub struct Material {
@@ -67,7 +73,9 @@ impl Clone for Material {
 }
 
 fn default_path_program(isect: &RayIsect, rng: &mut rand::ThreadRng) -> Option<Ray> { None }
-fn default_color_program(isect: &RayIsect) -> (Color3f, Color3f) { (Color3f::default(), Color3f::default()) }
+fn default_color_program(isect: &RayIsect) -> ColorProgramResult {
+    ColorProgramResult { emissive: Color3f::default(), transmissive: Color3f::default() }
+}
 impl Default for Material {
     fn default() -> Material {
         Material {
@@ -129,7 +137,9 @@ pub const MAX_BOUNCES: usize = 6;
 
 pub struct Path<'a> {
     pub num_bounces: i32,
-    pub isects: [RayIsect<'a>; MAX_BOUNCES]
+    pub isects: [RayIsect<'a>; MAX_BOUNCES],
+    // cached first isect color result. we re-use first isect!
+    pub first_isect_color: Option<ColorProgramResult>
 }
 
 #[test]
