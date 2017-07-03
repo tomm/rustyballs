@@ -1,5 +1,10 @@
 extern crate rand;
+extern crate noise;
 extern crate rustyballs;
+#[macro_use]
+extern crate lazy_static;
+
+use noise::NoiseModule;
 use rand::Rng; // why did i need this for rng.gen?
 use rustyballs::render_scene;
 use rustyballs::dump_hdr_postprocessed_image;
@@ -9,6 +14,38 @@ use rustyballs::color3f::Color3f;
 use rustyballs::quaternion::Quaternion;
 use rustyballs::raytracer::{random_vector_in_hemisphere,random_normal,VacuumAction,IsectFrom,Ray,RayIsect,RenderConfig,SceneObj,Primitive,
 Scene,Camera,Material,EPSILON};
+
+static ITERS: i32 = 500;
+static RESOLUTION: (u32, u32) = (1024, 1024);
+
+lazy_static! {
+    static ref perlin: noise::Perlin = noise::Perlin::new();
+    static ref gas_giant_basis: [Vec3; 3] = {
+        let pole = Vec3{x:0.5, y:0., z:1.0}.normal();
+        let a = Vec3{x:1., y:0., z:0.}.cross(&pole).normal();
+        let b = a.cross(&pole).normal();
+        [pole, a, b]
+    };
+}
+
+fn perlin3d(p: &Vec3) -> f32 {
+    perlin.get([p.x, p.y, p.z])
+}
+fn perlin1d(p: f32) -> f32 {
+    perlin.get([p,0.0])
+}
+fn octavenoise(octaves: i32, persistence: f32, lacunarity: f32, p: &Vec3) -> f32
+{
+    let mut n: f32 = 0.0;
+	let mut octaveAmplitude: f32 = 1.0;
+	let mut jizm: f32 = 1.0;
+    for i in 0..octaves {
+		n += octaveAmplitude * perlin3d(&p.smul(jizm));
+		octaveAmplitude *= persistence;
+		jizm *= lacunarity;
+	}
+	(0.5 + n*0.5)
+}
 
 // _pp = PathProgram
 fn semi_mirror_pp(isect: &RayIsect, rng: &mut rand::ThreadRng) -> Option<Ray> {
@@ -80,6 +117,76 @@ fn diffuse_pp(isect: &RayIsect, rng: &mut rand::ThreadRng) -> Option<Ray> {
     })
 }
 
+fn gas_giant_ring_isect_radius(isect: &RayIsect) -> f32 {
+    match isect.scene_obj.prim {
+        Primitive::Plane(pos, normal) => {
+            let isect_hitpos = isect.hit_pos();
+            let dir = isect_hitpos - pos;
+            normal.cross(&dir).length()
+        }
+        _ => unreachable!()
+    }
+}
+fn gas_giant_ring_pp(isect: &RayIsect, rng: &mut rand::ThreadRng) -> Option<Ray> {
+    match isect.scene_obj.prim {
+        Primitive::Plane(pos, normal) => {
+            let dist = gas_giant_ring_isect_radius(isect);
+            if dist > 0.85 && dist < 1.2 {
+                diffuse_pp(isect, rng)
+            } else {
+                // missed rings. continue on
+                Some(Ray{origin: isect.hit_pos() + normal.smul(EPSILON), dir: isect.ray.dir})
+            }
+        }
+        _ => unreachable!()
+    }
+}
+fn gas_giant_ring_cp(isect: &RayIsect) -> (Color3f, Color3f) {
+    match isect.scene_obj.prim {
+        Primitive::Plane(pos, normal) => {
+            let dist = gas_giant_ring_isect_radius(isect);
+            if dist > 0.85 && dist < 1.2 {
+                let mut brightness =
+                    perlin3d(&Vec3 {x: 0., y: 0., z: 30.0*dist}) +
+                    perlin3d(&Vec3 {x: 0., y: 0., z: 60.0*dist}) +
+                    perlin3d(&Vec3 {x: 0., y: 0., z: 120.0*dist});
+                brightness *= brightness;
+                (Color3f{r:brightness, g:brightness, b:brightness}, Color3f::default())
+            } else {
+                (Color3f{r:1.0, g:1.0, b:1.0}, Color3f::default())
+            }
+        }
+        _ => unreachable!()
+    }
+}
+fn gas_giant_cp(isect: &RayIsect) -> (Color3f, Color3f) {
+    match isect.scene_obj.prim {
+        Primitive::Sphere(pos, radius) => {
+            let p = (isect.hit_pos() - pos).normal();
+            let q = Vec3{x: p.dot(&gas_giant_basis[0]), y: p.dot(&gas_giant_basis[1]), z: p.dot(&gas_giant_basis[2])};
+            let n = octavenoise(12, 0.5, 2.0, &q.smul(perlin3d(&Vec3{x:q.x*10.0, y:q.y*2.0, z:q.z*2.0})));
+            (
+                Color3f{r:0.50,g:0.22,b:0.18}.smul(1.0-n)+Color3f{r:0.99,g:0.76,b:0.62}.smul(n),
+                Color3f::default() 
+            )
+        }
+        _ => unreachable!()
+    }
+}
+fn moon_cp(isect: &RayIsect) -> (Color3f, Color3f) {
+    match isect.scene_obj.prim {
+        Primitive::Sphere(pos, radius) => {
+            let p = (isect.hit_pos() - pos).normal();
+            let n = octavenoise(12, 0.5, 2.0, &p.smul(100.0));
+            (
+                Color3f{r:0.50,g:0.50,b:0.50}.smul(1.0-n)+Color3f{r:1.0,g:1.0,b:1.0}.smul(n),
+                Color3f::default() ,
+            )
+        }
+        _ => unreachable!()
+    }
+}
+
 // _cp = ColorProgram
 // returning (transmissive, emissive) colours
 fn white_wall_cp(_: &RayIsect) -> (Color3f, Color3f) { (Color3f{r:1., g:1., b:1.}, Color3f::default()) }
@@ -97,6 +204,7 @@ fn check_floor_cp(isect: &RayIsect) -> (Color3f, Color3f) {
         (Color3f{r:0.5, g:0.5, b:0.5}, Color3f::default())
     }
 }
+fn red_star_cp(_: &RayIsect) -> (Color3f, Color3f) { (Color3f{r:1., g:0.3, b:0.1}, Color3f{r:1., g:0.3, b:0.1}) }
 
 fn fog_cp(_: &RayIsect) -> (Color3f, Color3f) { (Color3f{r:1., g:1., b:1.}, Color3f::black()) }
 static scatterDummyObj: SceneObj = SceneObj {
@@ -143,69 +251,51 @@ fn main() {
         vacuum_program: Some(vacuum_program)
     };
     scene.objs = vec![
-        // light
+        // star to right of camera
         SceneObj {
-            prim: Primitive::Sphere(Vec3 {x: 0., y:3., z: -3.}, 0.5),
-            mat: Material { color_program: bright_white_light_cp, path_program: diffuse_pp /* end paths here */ }
-        },
-        // balls in scene
-        SceneObj {
-            prim: Primitive::Sphere(Vec3 {x: -1.2, y:0.7, z: -3.}, 0.5),
-            mat: Material { color_program: red_ball_cp, path_program: glass_pp }
+            prim: Primitive::Sphere(Vec3 {x: 10., y:-0.8, z: -0.3}, 1.),
+            mat: Material { color_program: red_star_cp, path_program: diffuse_pp /* end paths here */ }
         },
         SceneObj {
-            prim: Primitive::Sphere(Vec3{x:0., y: 0.7, z: -3.}, 0.5),
-            mat: Material { color_program: green_ball_cp, path_program: glass_pp }
+            prim: Primitive::Sphere(Vec3 {x: 10., y:1.3, z: 1.1}, 1.),
+            mat: Material { color_program: red_star_cp, path_program: diffuse_pp /* end paths here */ }
         },
+        // moon below camera
         SceneObj {
-            prim: Primitive::Sphere(Vec3 {x: 1.2, y:0.7, z: -3.}, 0.5),
-            mat: Material { color_program: blue_ball_cp, path_program: glass_pp }
+            prim: Primitive::Sphere(Vec3 {x: 0., y:-0.1, z: 0.}, 0.0995),
+            mat: Material { color_program: moon_cp, path_program: diffuse_pp }
         },
+        // gas giant in above & front of camera
+        SceneObj {
+            prim: Primitive::Sphere(Vec3 {x: 0., y:1., z: -1.}, 0.65),
+            mat: Material { color_program: gas_giant_cp, path_program: diffuse_pp }
+        },
+        // gas giant ring
+        SceneObj {
+            prim: Primitive:: Plane(Vec3 {x: 0., y:1., z: -1.}, Vec3{x:0.5, y:0., z:1.0}.normal()),
+            mat: Material { color_program: gas_giant_ring_cp, path_program: gas_giant_ring_pp }
+        },
+    /*
         // floor
         SceneObj {
             prim: Primitive::Plane(Vec3 {x:0., y:0., z:0.}, Vec3{x:0.,y:1., z:0.}),
             mat: Material { color_program: check_floor_cp, path_program: semi_mirror_pp }
         },
-        // back wall
-        SceneObj {
-            prim: Primitive::Plane(Vec3 {x:0., y:0., z:-6.}, Vec3{x:0.,y:0., z:1.}),
-            mat: Material { color_program: white_wall_cp, path_program: diffuse_pp }
-        },
-        // left wall
-        SceneObj {
-            prim: Primitive::Plane(Vec3 {x:-2., y:0., z:0.}, Vec3{x:1.,y:0., z:0.}),
-            mat: Material { color_program: left_wall_cp, path_program: diffuse_pp }
-        },
-        // right wall
-        SceneObj {
-            prim: Primitive::Plane(Vec3 {x:2., y:0., z:0.}, Vec3{x:-1.,y:0., z:0.}),
-            mat: Material { color_program: right_wall_cp, path_program: diffuse_pp }
-        },
-        // roof
-        SceneObj {
-            prim: Primitive::Plane(Vec3 {x:0., y:3., z:0.}, Vec3{x:0.,y:-1., z:0.}),
-            mat: Material { color_program: white_wall_cp, path_program: diffuse_pp }
-        },
-        // wall behind camera
-        SceneObj {
-            prim: Primitive::Plane(Vec3 {x:0., y:0., z:0.}, Vec3{x:0.,y:0., z:-1.}),
-            mat: Material { color_program: white_wall_cp, path_program: diffuse_pp }
-        },
+        */
     ];
 
-    let render_config = RenderConfig { threads:8, samples_per_first_isect: 19, image_size: (512, 512) };
+    let render_config = RenderConfig { threads:8, samples_per_first_isect: 19, image_size: RESOLUTION};
 
     let camera = Camera {
-        position: Vec3{x:0.0, y:1.5, z:-1.},
-        orientation: Quaternion::from_axis_angle(&Vec3{x:-1., y:0., z:0.}, 0.2)
+        position: Vec3{x:0., y:0., z:0.},
+        orientation: Quaternion::default()
     };
 
-    render_skybox("vrdemosky", 4, &render_config, &camera, &scene);
+    render_skybox("vrdemosky", ITERS, &render_config, &camera, &scene);
 }
 
 fn render_skybox(file_prefix: &str, iterations: i32, render_config: &RenderConfig, camera: &Camera, scene: &Scene)
 {
-    // nasty. remove camera setup from scene object
     let mut face_cam = *camera;
 
     let img_fr = render_scene(iterations, &render_config, &face_cam, &scene);

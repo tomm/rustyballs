@@ -42,7 +42,7 @@ impl Default for RenderConfig {
 pub enum Primitive {
     Sphere(Vec3, f32),
     Triangle(Vec3, Vec3, Vec3),
-    Plane(Vec3, Vec3),  // (position, origin)
+    Plane(Vec3, Vec3),  // (origin, normal)
     ScatterEvent
 }
 
