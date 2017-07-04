@@ -60,16 +60,18 @@ pub type PathProgram = fn(&RayIsect, &mut rand::ThreadRng) -> Option<Ray>;
 pub type ColorProgram = fn(&RayIsect) -> ColorProgramResult;
 pub type VacuumProgram<'a> = fn(&RayIsect, &mut rand::ThreadRng) -> VacuumAction<'a>;
 
-pub struct Material {
+pub struct Material<'a> {
     pub color_program: ColorProgram,
-    pub path_program: PathProgram
+    pub path_program: PathProgram,
+    pub vacuum_program: Option<VacuumProgram<'a>>
 }
 
-impl Clone for Material {
-    fn clone(&self) -> Material {
+impl<'a> Clone for Material<'a> {
+    fn clone(&self) -> Material<'a> {
         Material {
             path_program: self.path_program,
-            color_program: self.color_program
+            color_program: self.color_program,
+            vacuum_program: None
         }
     }
 }
@@ -78,18 +80,18 @@ fn default_path_program(isect: &RayIsect, rng: &mut rand::ThreadRng) -> Option<R
 fn default_color_program(isect: &RayIsect) -> ColorProgramResult {
     ColorProgramResult { emissive: Color3f::default(), transmissive: Color3f::default() }
 }
-impl Default for Material {
-    fn default() -> Material {
+impl<'a> Default for Material<'a> {
+    fn default() -> Material<'a> {
         Material {
             color_program: default_color_program,
-            path_program: default_path_program
+            path_program: default_path_program,
+            vacuum_program: None
         }
     }
 }
 
 pub struct Scene<'a> {
-    pub objs: Vec<SceneObj>,
-    pub vacuum_program: Option<VacuumProgram<'a>>
+    pub objs: Vec<SceneObj<'a>>
 }
 
 #[derive(Copy,Clone)]
@@ -99,9 +101,9 @@ pub struct Camera {
 }
 
 #[derive(Clone,Default)]
-pub struct SceneObj {
+pub struct SceneObj<'a> {
     pub prim: Primitive,
-    pub mat: Material
+    pub mat: Material<'a>
 }
 
 #[derive(Clone,Copy)]
@@ -112,7 +114,7 @@ pub struct RayIsect<'a> {
     pub ray: Ray,
     pub dist: f32,
     pub from: IsectFrom,
-    pub scene_obj: &'a SceneObj
+    pub scene_obj: &'a SceneObj<'a>
 }
 
 impl<'a> RayIsect<'a> {

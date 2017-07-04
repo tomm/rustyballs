@@ -112,20 +112,19 @@ fn find_first_intersection<'a>(ray: &Ray, scene: &'a Vec<SceneObj>) -> Option<Ra
 
 fn make_ray_scatter_path<'a>(ray: &Ray, scene: &'a Scene, rng: &mut rand::ThreadRng, path: &mut Path<'a>) {
     match find_first_intersection(ray, &scene.objs) {
-        Some(isect) => {
-            path.isects[path.num_bounces as usize] = isect.clone();
-            match scene.vacuum_program {
-                Some(prog) => {
-                    match (prog)(&isect, rng) {
-                        VacuumAction::Continue => {},
-                        VacuumAction::Scatter(new_isect) => {
-                            // replace intersection with a scattering
-                            path.isects[path.num_bounces as usize] = new_isect.clone();
-                        }
+        Some(mut isect) => {
+            // if vacuum program causes scatter event then
+            // switch out this isect with scatter isect
+            isect = match isect.scene_obj.mat.vacuum_program {
+                None => isect,
+                Some(vacuum_program) => {
+                    match vacuum_program(&isect, rng) {
+                        VacuumAction::Scatter(isect2) => isect2,
+                        VacuumAction::Continue => isect
                     }
-                },
-                None => {}
+                }
             };
+            path.isects[path.num_bounces as usize] = isect.clone();
             path.num_bounces += 1;
             if path.num_bounces < MAX_BOUNCES as i32 {
                 // call material's path_program to see what our next ray will be
