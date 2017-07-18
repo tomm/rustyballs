@@ -87,10 +87,10 @@ fn ray_primitive_intersects<'a>(ray: &Ray, scene_obj: &'a SceneObj) -> Option<Ra
     }
 }
 
-fn find_first_intersection<'a>(ray: &Ray, scene: &'a Vec<SceneObj>) -> Option<RayIsect<'a>> {
+fn find_first_intersection<'a>(ray: &Ray, scene: &'a Scene) -> Option<RayIsect<'a>> {
     let mut nearest: Option<RayIsect> = None;
 
-    for obj in scene {
+    for ref obj in &scene.objs {
         match ray_primitive_intersects(&ray, &obj) {
             Some(isect) => {
                 if nearest.is_some() {
@@ -111,7 +111,7 @@ fn find_first_intersection<'a>(ray: &Ray, scene: &'a Vec<SceneObj>) -> Option<Ra
 }
 
 fn make_ray_scatter_path<'a>(ray: &Ray, scene: &'a Scene, rng: &mut rand::ThreadRng, path: &mut Path<'a>) {
-    match find_first_intersection(ray, &scene.objs) {
+    match find_first_intersection(ray, &scene) {
         Some(mut isect) => {
             // if vacuum program causes scatter event then
             // switch out this isect with scatter isect
