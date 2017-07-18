@@ -45,9 +45,9 @@ impl Default for Primitive {
     }
 }
 
-pub enum VacuumAction<'a> {
+pub enum VacuumAction {
     Continue,
-    Scatter(RayIsect<'a>)
+    Scatter(RayIsect<'static>)
 }
 
 #[derive(Clone,Copy)]
@@ -58,16 +58,16 @@ pub struct ColorProgramResult {
 
 pub type PathProgram = fn(&RayIsect, &mut rand::ThreadRng) -> Option<Ray>;
 pub type ColorProgram = fn(&RayIsect) -> ColorProgramResult;
-pub type VacuumProgram<'a> = fn(&RayIsect, &mut rand::ThreadRng) -> VacuumAction<'a>;
+pub type VacuumProgram = fn(&RayIsect, &mut rand::ThreadRng) -> VacuumAction;
 
-pub struct Material<'a> {
+pub struct Material {
     pub color_program: ColorProgram,
     pub path_program: PathProgram,
-    pub vacuum_program: Option<VacuumProgram<'a>>
+    pub vacuum_program: Option<VacuumProgram>
 }
 
-impl<'a> Clone for Material<'a> {
-    fn clone(&self) -> Material<'a> {
+impl Clone for Material {
+    fn clone(&self) -> Material {
         Material {
             path_program: self.path_program,
             color_program: self.color_program,
@@ -80,8 +80,8 @@ fn default_path_program(isect: &RayIsect, rng: &mut rand::ThreadRng) -> Option<R
 fn default_color_program(isect: &RayIsect) -> ColorProgramResult {
     ColorProgramResult { emissive: Color3f::default(), transmissive: Color3f::default() }
 }
-impl<'a> Default for Material<'a> {
-    fn default() -> Material<'a> {
+impl Default for Material {
+    fn default() -> Material {
         Material {
             color_program: default_color_program,
             path_program: default_path_program,
@@ -90,8 +90,8 @@ impl<'a> Default for Material<'a> {
     }
 }
 
-pub struct Scene<'a> {
-    pub objs: Vec<SceneObj<'a>>
+pub struct Scene {
+    pub objs: Vec<SceneObj>
 }
 
 #[derive(Copy,Clone)]
@@ -101,9 +101,9 @@ pub struct Camera {
 }
 
 #[derive(Clone,Default)]
-pub struct SceneObj<'a> {
+pub struct SceneObj {
     pub prim: Primitive,
-    pub mat: Material<'a>
+    pub mat: Material
 }
 
 #[derive(Clone,Copy)]
@@ -114,7 +114,7 @@ pub struct RayIsect<'a> {
     pub ray: Ray,
     pub dist: f32,
     pub from: IsectFrom,
-    pub scene_obj: &'a SceneObj<'a>
+    pub scene_obj: &'a SceneObj
 }
 
 impl<'a> RayIsect<'a> {

@@ -251,7 +251,7 @@ fn atmosphere_scatter_pp(isect: &RayIsect, rng: &mut rand::ThreadRng) -> Option<
             }
     })
 }
-fn atmosphere_scatter_vp<'a>(isect: &RayIsect, rng: &mut rand::ThreadRng) -> VacuumAction<'a> {
+fn atmosphere_scatter_vp<'a>(isect: &RayIsect, rng: &mut rand::ThreadRng) -> VacuumAction {
     const SEGMENT_LEN: f32 = 0.02;
     let mut p: f32 = 0.;
 
@@ -279,10 +279,10 @@ fn atmosphere_scatter_vp<'a>(isect: &RayIsect, rng: &mut rand::ThreadRng) -> Vac
         p += SEGMENT_LEN;
     }
 }
-fn atmosphere_ground_vp<'a>(isect: &RayIsect, rng: &mut rand::ThreadRng) -> VacuumAction<'a> {
+fn atmosphere_ground_vp<'a>(isect: &RayIsect, rng: &mut rand::ThreadRng) -> VacuumAction {
     atmosphere_scatter_vp(isect, rng)
 }
-fn atmosphere_sky_vp<'a>(isect: &RayIsect, rng: &mut rand::ThreadRng) -> VacuumAction<'a> {
+fn atmosphere_sky_vp<'a>(isect: &RayIsect, rng: &mut rand::ThreadRng) -> VacuumAction {
     match isect.from {
         IsectFrom::Outside => VacuumAction::Continue,
         IsectFrom::Inside => atmosphere_scatter_vp(isect, rng)
